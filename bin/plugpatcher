@@ -537,8 +537,13 @@ cmd_open() {
       return 0 ;;
     herdr)
       command -v herdr >/dev/null 2>&1 || die "herdr is set as the AI harness but is not installed"
-      log "opening harness: Herdr"
-      ( cd "$repo" && setsid bash -lc "omarchy launch terminal herdr" >/dev/null 2>&1 & )
+      if herdr status server --json 2>/dev/null | jq -e '.running == true' >/dev/null 2>&1; then
+        log "opening a Herdr workspace at: $repo"
+        setsid herdr workspace create --cwd "$repo" --label "$id" --focus >/dev/null 2>&1 &
+      else
+        log "starting Herdr for: $repo"
+        ( cd "$repo" && setsid bash -lc "omarchy launch terminal herdr" >/dev/null 2>&1 & )
+      fi
       return 0 ;;
     tmux)
       command -v tmux >/dev/null 2>&1 || die "tmux is set as the AI harness but is not installed"

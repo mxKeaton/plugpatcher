@@ -438,6 +438,7 @@ Panel {
           }
 
           Button {
+            visible: (root.settings.models || []).length > 1
             width: parent.width
             leftAlign: true
             text: "Model:  " + root.labelFor(root.settings.models, root.settings.model)
