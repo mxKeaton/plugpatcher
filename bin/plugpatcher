@@ -134,7 +134,15 @@ set_bar() { # target bar plugin id
   current="$(jq -r '.bar.id // empty' "$config" 2>/dev/null || true)"
   [[ "$current" == "$target" ]] && return 0
   omarchy bar use "$target" >/dev/null 2>&1 || true
-  setsid bash -c 'sleep 0.4; omarchy restart shell' >/dev/null 2>&1 &
+  # Restart the shell so the bar host rebuilds. It must be a transient user
+  # unit: a child of this process (even setsid) lives in the shell's unit and is
+  # killed when the shell reloads, so the restart would never run.
+  if command -v systemd-run >/dev/null 2>&1; then
+    systemd-run --user --collect --quiet --unit="plugpatcher-restart-$RANDOM" \
+      bash -c 'sleep 0.5; omarchy restart shell' >/dev/null 2>&1 || true
+  else
+    setsid bash -c 'sleep 0.5; omarchy restart shell' >/dev/null 2>&1 &
+  fi
 }
 
 ensure_active() { # source-id
