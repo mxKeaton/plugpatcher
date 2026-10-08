@@ -33,6 +33,13 @@ actions that apply to it:
 Your edits live in a private git repo, so they are easy to track and send
 upstream. The original plugin is never modified.
 
+## For AI agents
+
+The repo ships an agent skill at `skills/plugpatcher/SKILL.md` that teaches a
+coding agent how to work with PlugPatcher (edit in the repo, `sync`, open a PR).
+It is not installed automatically — copy it into your agent's skills directory,
+e.g. `~/.pi/agent/skills/plugpatcher/` or `~/.claude/skills/plugpatcher/`.
+
 ## License
 
 MIT
