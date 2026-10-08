@@ -55,10 +55,10 @@ The clone carries `omarchy.clonedFrom = <id>`, so the shell:
 
 `~/.config/plugpatcher/config.json`:
 
-- `ai` — command run by `open` instead of the default agent. `{dir}` is
-  replaced with the repo path and the command runs there. Example:
-  `{"ai": "omarchy launch terminal herdr"}`. There is no Omarchy "default
-  harness" setting; point this at whatever harness you use (Herdr, tmux, …).
+- `ai` — optional command run by `open` instead of the default coding agent.
+  `{dir}` is replaced with the repo path and the command runs there. There is
+  no Omarchy "default harness" setting; set this only if you want `open` to
+  launch a harness of your own. Left unset, `open` uses `omarchy default agent`.
 
 ## The workflow an AI should follow
 
