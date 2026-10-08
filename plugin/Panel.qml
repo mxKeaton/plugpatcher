@@ -691,7 +691,8 @@ Panel {
 
                       ActionButton {
                         visible: modelData.state === "editing"
-                        text: modelData.cloneEnabled ? "\uf061  Original" : "\uf061  Patched"
+                        iconText: "\u2913"
+                        tooltipText: modelData.cloneEnabled ? "Switch to original" : "Switch to patched"
                         onClicked: root.runAction(["use", modelData.id, modelData.cloneEnabled ? "original" : "patched"])
                       }
 
