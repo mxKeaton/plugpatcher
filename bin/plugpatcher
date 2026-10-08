@@ -565,7 +565,8 @@ cmd_open() {
         fi
       fi
       log "opening Herdr at: $repo"
-      setsid bash -lc "omarchy launch terminal herdr" >/dev/null 2>&1 &
+      # Focus an existing Herdr window instead of opening a second one.
+      setsid bash -lc "omarchy launch or focus herdr 'omarchy-launch-tui --app-id=org.omarchy.herdr herdr'" >/dev/null 2>&1 &
       ;;
   esac
 }
