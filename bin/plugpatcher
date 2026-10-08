@@ -17,7 +17,7 @@
 #   status <id>          details for one plugin
 #   setup <id> [url]     start editing (clone upstream into a per-project repo)
 #   sync <id>            pull upstream into the repo (rebase) and regenerate the clone
-#   pr <id>              push your branch to a fork and open an AI-described pull request
+#   pr <id> [ai|manual]  open a PR (ai writes the text; manual opens GitHub's form)
 #   revert <id>          stop editing: restore the original, delete the repo
 #   open <id>            launch the system default agent in the repo, resuming its session
 #   files <id>           open the patch folder in the default file manager
@@ -596,9 +596,10 @@ EOF
 }
 
 cmd_pr() {
-  local id="${1:-}"
-  [[ -n "$id" ]] || die "usage: plugpatcher pr <plugin-id>"
+  local id="${1:-}" mode="${2:-ai}"
+  [[ -n "$id" ]] || die "usage: plugpatcher pr <plugin-id> [ai|manual]"
   is_setup "$id" || die "'$id' is not set up"
+  case "$mode" in ai|manual) ;; *) die "unknown pr mode '$mode' (use ai or manual)" ;; esac
   need git; need jq
   local mf repo branch ub upstream slug
   mf="$(meta_file "$id")"
@@ -631,6 +632,16 @@ cmd_pr() {
 
   log "pushing to $me:${slug#*/} ($remote_branch)"
   git -C "$repo" push -q -f -u plugpatcher-fork "$branch:$remote_branch"
+
+  # Manual: just open GitHub's PR form with the branch selected, leaving the
+  # title and description for the user to write.
+  if [[ "$mode" == "manual" ]]; then
+    local compare_url="https://github.com/$slug/compare/$ub...$me:$remote_branch?expand=1"
+    log "opening $compare_url"
+    open_url "$compare_url"
+    printf '%s\n' "$compare_url"
+    return 0
+  fi
 
   # Same patch already reviewed? Point at it rather than failing. gh wants
   # "owner:branch" for cross-repo PRs but a bare branch for same-repo ones.
@@ -1096,7 +1107,7 @@ Commands:
   status <id>          details for one plugin
   setup <id> [url]     start editing (clone upstream into a per-project repo)
   sync <id>            pull upstream into the repo (rebase) and regenerate the clone
-  pr <id>              push your branch to a fork and open an AI-described PR
+  pr <id> [ai|manual]  open a PR: ai writes the text, manual opens GitHub's form
   revert <id>          stop editing: restore the original, delete the clone
   use <id> <side>      switch the loaded plugin: patched | original
   delete <id> <side>   delete original | patched | both

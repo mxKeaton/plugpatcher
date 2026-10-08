@@ -24,7 +24,7 @@ actions that apply to it:
 - **Editor** / **Browse** — open the code in your editor / file manager.
 - **Update** — pull in upstream changes and rebuild your version.
 - **Source** — open the plugin's original GitHub page.
-- **Send PR** — open a pull request for your changes (**Cancel PR** withdraws it).
+- **Send PR** — then pick **Manual PR** (opens GitHub's form for you to fill in) or **AI PR** (writes the title and description for you); **Cancel PR** withdraws it.
 - **Delete** — remove the original, the patched copy, or both.
 - **switch** — flip which version is loaded: patched ⇄ original.
 

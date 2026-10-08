@@ -31,6 +31,7 @@ Panel {
   property bool busy: false
   property string statusMessage: ""
   property string pendingDelete: ""   // plugin id whose delete prompt is open
+  property string pendingPr: ""       // plugin id whose PR options are open
   property string sortBy: "name"       // name | edits | updates | id
   property string lastStdout: ""
   property string lastStderr: ""
@@ -41,6 +42,7 @@ Panel {
   property string lastActionId: ""    // plugin id of the running/last action
   property bool cancelRequested: false // user aborted an in-flight PR
   readonly property bool feedbackIsUrl: /^https?:\/\//.test(feedback)
+  readonly property bool feedbackIsPr: /\/pull\/\d+/.test(feedback)
   property bool cliAvailable: true
   property bool settingsOpen: false
   property string picking: ""          // "" | "harness" | "model"
@@ -113,7 +115,10 @@ Panel {
     var a = String(args[0] || "")
     if (a === "setup") return "Setting up editing…"
     if (a === "sync") return "Updating from origin…"
-    if (a === "pr") return "Pushing and writing the PR description… (this can take a moment)"
+    if (a === "pr") {
+      if (String(args[2] || "") === "manual") return "Pushing and opening the GitHub PR page…"
+      return "Pushing and writing the PR description… (this can take a moment)"
+    }
     if (a === "pr-cancel") return "Closing the pull request…"
     if (a === "revert") return "Reverting to the original…"
     if (a === "delete") return "Deleting…"
@@ -529,7 +534,7 @@ Panel {
 
               // After it finished: close the PR that was created.
               ActionButton {
-                visible: !root.busy && root.lastAction === "pr" && root.lastActionId !== ""
+                visible: !root.busy && root.feedbackIsPr
                 text: "Cancel PR"
                 onClicked: root.runAction(["pr-cancel", root.lastActionId])
               }
@@ -811,9 +816,9 @@ Panel {
                       }
 
                       ActionButton {
-                        visible: modelData.state === "editing" && root.pendingDelete !== modelData.id
+                        visible: modelData.state === "editing" && root.pendingDelete !== modelData.id && root.pendingPr !== modelData.id
                         text: "Send PR"
-                        onClicked: root.runAction(["pr", modelData.id])
+                        onClicked: root.pendingPr = modelData.id
                       }
 
                       ActionButton {
@@ -821,6 +826,44 @@ Panel {
                         text: "Delete"
                         foreground: root.danger
                         onClicked: root.pendingDelete = modelData.id
+                      }
+                    }
+
+                    // PR options
+                    Row {
+                      visible: modelData.state === "editing" && root.pendingPr === modelData.id
+                      spacing: Style.space(6)
+
+                      Text {
+                        textFormat: Text.PlainText
+                        text: "PR:"
+                        color: root.muted
+                        font.family: root.ff
+                        font.pixelSize: Style.font.bodySmall
+                        anchors.verticalCenter: parent.verticalCenter
+                      }
+
+                      ActionButton {
+                        text: "Manual PR"
+                        onClicked: {
+                          var t = modelData.id
+                          root.pendingPr = ""
+                          root.runAction(["pr", t, "manual"])
+                        }
+                      }
+
+                      ActionButton {
+                        text: "AI PR"
+                        onClicked: {
+                          var t = modelData.id
+                          root.pendingPr = ""
+                          root.runAction(["pr", t, "ai"])
+                        }
+                      }
+
+                      ActionButton {
+                        text: "Cancel"
+                        onClicked: root.pendingPr = ""
                       }
                     }
 

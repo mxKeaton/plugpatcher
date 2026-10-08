@@ -43,7 +43,7 @@ The clone carries `omarchy.clonedFrom = <id>`, so the shell:
 | `plugpatcher status <id>` | repo/branch/upstream ahead-behind for one plugin |
 | `plugpatcher setup <id> [url]` | start editing: clone upstream into the repo, generate the clone, switch to it |
 | `plugpatcher sync <id>` | `git fetch` upstream, rebase your branch, regenerate the clone; aborts on conflict |
-| `plugpatcher pr <id>` | fork if needed, push your branch, open a PR against upstream (one branch per patch) |
+| `plugpatcher pr <id> [ai|manual]` | push your branch and open a PR: `ai` writes the title/description, `manual` opens GitHub's form (one branch per patch) |
 | `plugpatcher pr-cancel <id>` | close the PR most recently opened for `<id>` (also `unpr`) |
 | `plugpatcher source <id>` | open the plugin's upstream (source) page in the browser |
 | `plugpatcher open-url <url>` | open a URL in the browser |
