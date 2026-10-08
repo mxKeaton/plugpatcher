@@ -25,6 +25,10 @@ Panel {
   readonly property color fg: bar ? bar.foreground : Color.foreground
   readonly property string ff: bar ? bar.fontFamily : Style.font.family
 
+  // The bar sizes the widget slot from these, not from the child button.
+  implicitWidth: button.implicitWidth
+  implicitHeight: button.implicitHeight
+
   function reload() {
     if (!busy && !catalogProc.running) catalogProc.running = true
   }
@@ -94,7 +98,7 @@ Panel {
     id: button
     anchors.fill: parent
     bar: root.bar
-    text: ""
+    text: "\uf0ad"
     tooltipText: "PlugPatcher"
     onPressed: root.toggle()
   }
