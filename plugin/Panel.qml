@@ -40,6 +40,7 @@ Panel {
   property string lastAction: ""      // verb of the running/last action
   property string lastActionId: ""    // plugin id of the running/last action
   property bool cancelRequested: false // user aborted an in-flight PR
+  readonly property bool feedbackIsUrl: /^https?:\/\//.test(feedback)
   property bool cliAvailable: true
   property bool settingsOpen: false
   property string picking: ""          // "" | "harness" | "model"
@@ -99,6 +100,13 @@ Panel {
     } catch (e) {
       plugins = []
     }
+  }
+
+  function openUrl(u) {
+    var s = String(u || "")
+    if (s === "") return
+    urlProc.command = [cli, "open-url", s]
+    urlProc.running = true
   }
 
   function progressFor(args) {
@@ -224,6 +232,10 @@ Panel {
       waitForEnd: true
       onStreamFinished: root.parseCatalog(catalogOut.text)
     }
+  }
+
+  Process {
+    id: urlProc
   }
 
   Process {
@@ -481,15 +493,25 @@ Panel {
             spacing: Style.space(6)
 
             Text {
+              id: feedbackText
               textFormat: Text.PlainText
               text: root.busy
                     ? "\uf110  " + root.progress
                     : ((root.feedbackError ? "\uf071  " : "\uf00c  ") + root.feedback)
-              color: root.feedbackError ? root.danger : root.fg
+              color: (!root.busy && root.feedbackIsUrl) ? Color.accent
+                     : (root.feedbackError ? root.danger : root.fg)
               font.family: root.ff
               font.pixelSize: Style.font.bodySmall
+              font.underline: !root.busy && root.feedbackIsUrl
               wrapMode: Text.WordWrap
               width: parent.width
+
+              MouseArea {
+                anchors.fill: parent
+                visible: !root.busy && root.feedbackIsUrl
+                cursorShape: Qt.PointingHandCursor
+                onClicked: root.openUrl(root.feedback)
+              }
             }
 
             Row {
@@ -780,6 +802,12 @@ Panel {
                         visible: modelData.state === "editing"
                         text: "Update"
                         onClicked: root.runAction(["sync", modelData.id])
+                      }
+
+                      ActionButton {
+                        visible: !!modelData.upstream
+                        text: "Source"
+                        onClicked: root.runAction(["source", modelData.id])
                       }
 
                       ActionButton {

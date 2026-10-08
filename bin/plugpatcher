@@ -707,6 +707,34 @@ cmd_pr_cancel() {
   printf 'closed %s\n' "$url"
 }
 
+# Open a plugin's upstream (source) page in the browser.
+cmd_source() {
+  local id="${1:-}"
+  [[ -n "$id" ]] || die "usage: plugpatcher source <plugin-id>"
+  is_setup "$id" || die "'$id' is not set up"
+  local upstream; upstream="$(jq -r '.upstream // empty' "$(meta_file "$id")")"
+  [[ -n "$upstream" ]] || die "no upstream recorded for '$id'"
+  log "opening $upstream"
+  open_url "$upstream"
+}
+
+# Open an arbitrary URL in the browser (used for the PR link).
+cmd_open_url() {
+  local url="${1:-}"
+  [[ -n "$url" ]] || die "usage: plugpatcher open-url <url>"
+  open_url "$url"
+}
+
+# Best-effort URL opener: Omarchy's launcher when present, else xdg-open.
+open_url() {
+  local url="$1"
+  if command -v omarchy-launch-browser >/dev/null 2>&1; then
+    omarchy-launch-browser "$url" >/dev/null 2>&1 || true
+  else
+    setsid xdg-open "$url" >/dev/null 2>&1 || true
+  fi
+}
+
 # ------------------------------------------------------------------------ open
 
 # Read a config value from ~/.config/plugpatcher/config.json.
@@ -1079,6 +1107,8 @@ Commands:
   heal                 re-activate adopted clones that went dormant
   update-all           open a terminal and run 'omarchy plugin update --yes'
   pr-cancel <id>       close the pull request most recently opened for <id>
+  source <id>          open the plugin's upstream (source) page in the browser
+  open-url <url>       open a URL in the browser
   settings             machine-readable settings for the panel (JSON)
   help                 this text
 USAGE
@@ -1106,6 +1136,8 @@ main() {
     heal)         cmd_heal "$@" ;;
     update-all)   cmd_update_all "$@" ;;
     pr-cancel|unpr|cancel-pr) cmd_pr_cancel "$@" ;;
+    source)       cmd_source "$@" ;;
+    open-url)     cmd_open_url "$@" ;;
     settings)     cmd_settings "$@" ;;
     help|-h|--help) usage ;;
     version|--version) echo "plugpatcher $VERSION" ;;
