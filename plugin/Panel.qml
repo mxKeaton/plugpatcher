@@ -333,7 +333,7 @@ Panel {
     id: button
     anchors.fill: parent
     bar: root.bar
-    text: "\udb85\udcd3"
+    text: "\udb85\udcd9"
     tooltipText: "PlugPatcher"
     onPressed: root.toggle()
   }
@@ -367,7 +367,7 @@ Panel {
 
           Text {
             id: title
-            text: "\udb85\udcd3  PlugPatcher"
+            text: "\udb85\udcd9  PlugPatcher"
             color: root.fg
             font.family: root.ff
             font.pixelSize: Style.font.title
