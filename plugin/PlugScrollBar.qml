@@ -28,7 +28,7 @@ Item {
 
   Rectangle {
     id: track
-    anchors.horizontalCenter: parent.horizontalCenter
+    anchors.right: parent.right
     width: Math.round(root.width * 0.75)
     height: root.height
     color: Util.alpha(root.foreground, 0.08)
@@ -36,7 +36,7 @@ Item {
 
   Rectangle {
     id: handle
-    anchors.horizontalCenter: parent.horizontalCenter
+    anchors.right: parent.right
     y: root.handleY
     width: track.width
     height: root.handleHeight

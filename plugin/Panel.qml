@@ -45,7 +45,7 @@ Panel {
   // Scrollbar geometry: barW is the visible width; barPush slides it right into
   // the panel's padding so it uses that space instead of leaving a gap.
   readonly property int barW: Style.space(18)
-  readonly property int barPush: Style.space(8)
+  readonly property int barPush: 0
 
   Component.onCompleted: cliCheck.running = true
 
