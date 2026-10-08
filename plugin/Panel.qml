@@ -255,6 +255,7 @@ Panel {
     anchorItem: button
     owner: root
     bar: root.bar
+    centerOnBar: true
     open: root.opened
     focusTarget: keyCatcher
     contentWidth: panel.fittedContentWidth(Style.space(600))
@@ -487,9 +488,11 @@ Panel {
             Flickable {
               id: pickFlick
               anchors.left: parent.left
+              anchors.right: parent.right
+              anchors.leftMargin: pickBar.width + Style.space(6)
+              anchors.rightMargin: pickBar.width + Style.space(6)
               anchors.top: parent.top
               anchors.bottom: parent.bottom
-              width: parent.width - pickBar.width - Style.space(6)
               contentWidth: width
               contentHeight: pickColumn.implicitHeight
               clip: true
@@ -548,9 +551,11 @@ Panel {
         Flickable {
           id: listFlick
           anchors.left: parent.left
+          anchors.right: parent.right
+          anchors.leftMargin: listBar.width + Style.space(6)
+          anchors.rightMargin: listBar.width + Style.space(6)
           anchors.top: parent.top
           anchors.bottom: parent.bottom
-          width: parent.width - listBar.width - Style.space(6)
           contentWidth: width
           contentHeight: pluginColumn.implicitHeight
           clip: true
