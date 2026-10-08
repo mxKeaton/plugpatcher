@@ -5,8 +5,8 @@ import qs.Commons
 import qs.Ui
 
 // PlugPatcher bar button + popup. Lists the user's shell plugins and drives the
-// `plugpatcher` CLI: set up editing, sync upstream, open a PR, remove, or open
-// the project in the default coding agent.
+// `plugpatcher` CLI: patch a plugin, update it from upstream, open it, send a
+// PR, or revert to the pristine original.
 Panel {
   id: root
   moduleName: "plugpatcher"
@@ -16,26 +16,31 @@ Panel {
   readonly property string cli: home + "/.local/bin/plugpatcher"
   readonly property string catalogPath: home + "/.local/share/plugpatcher/catalog.json"
 
-  property var plugins: []
-  property bool busy: false
-  property string statusMessage: ""
-
-  // Safe accessors: `bar` is injected by the host and can briefly be null
-  // while the panel is being built.
   readonly property color fg: bar ? bar.foreground : Color.foreground
   readonly property string ff: bar ? bar.fontFamily : Style.font.family
+  readonly property color muted: Util.alpha(root.fg, 0.55)
+  readonly property color cardBg: Util.alpha(root.fg, 0.05)
+  readonly property color cardBorder: Util.alpha(root.fg, 0.12)
+  readonly property color danger: "#e5484d"
 
   // The bar sizes the widget slot from these, not from the child button.
   implicitWidth: button.implicitWidth
   implicitHeight: button.implicitHeight
 
-  function reload() {
-    if (!busy && !catalogProc.running) catalogProc.running = true
-  }
+  property var plugins: []
+  property bool busy: false
+  property string statusMessage: ""
+  property string pendingRevert: ""   // plugin id awaiting revert confirmation
 
   function refresh() {
-    if (busy || listProc.running) return
-    listProc.running = true
+    if (busy) return
+    // Show whatever catalog exists immediately, then regenerate it.
+    reload()
+    if (!listProc.running) listProc.running = true
+  }
+
+  function reload() {
+    if (!busy && !catalogProc.running) catalogProc.running = true
   }
 
   function parseCatalog(raw) {
@@ -55,14 +60,14 @@ Panel {
     actionProc.running = true
   }
 
-  function stateLabel(p) {
-    if (p.state === "editing") return p.editId ? ("editing → " + p.editId) : "editing"
-    return "original"
+  function shortId(id) {
+    var h = 0, s = String(id)
+    for (var i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0
+    return h.toString(16)
   }
 
   onOpenedChanged: if (opened) refresh()
 
-  // Refresh: regenerate the catalog via the CLI, then read it.
   Process {
     id: listProc
     command: [root.cli, "list"]
@@ -94,6 +99,37 @@ Panel {
     }
   }
 
+  component ActionButton: Button {
+    foreground: root.fg
+    fontFamily: root.ff
+    fontSize: Style.font.bodySmall
+    bordered: true
+    enabled: !root.busy
+    horizontalPadding: Style.space(8)
+    verticalPadding: Style.space(3)
+  }
+
+  component Badge: Rectangle {
+    property string label: ""
+    property color textColor: root.muted
+    implicitWidth: badgeText.implicitWidth + Style.space(12)
+    implicitHeight: badgeText.implicitHeight + Style.space(4)
+    radius: height / 2
+    color: Util.alpha(root.fg, 0.06)
+    border.width: 1
+    border.color: Util.alpha(textColor, 0.35)
+    Text {
+      id: badgeText
+      anchors.centerIn: parent
+      textFormat: Text.PlainText
+      text: parent.label
+      color: parent.textColor
+      font.family: root.ff
+      font.pixelSize: Style.font.caption
+      font.bold: true
+    }
+  }
+
   BarIconButton {
     id: button
     anchors.fill: parent
@@ -110,7 +146,7 @@ Panel {
     bar: root.bar
     open: root.opened
     focusTarget: keyCatcher
-    contentWidth: panel.fittedContentWidth(Style.space(560))
+    contentWidth: panel.fittedContentWidth(Style.space(600))
     contentHeight: panel.fittedContentHeight(column.implicitHeight)
 
     PanelKeyCatcher {
@@ -125,14 +161,14 @@ Panel {
         anchors.top: parent.top
         spacing: Style.space(12)
 
-        // ---------------- hero ----------------
+        // ---------------------------------------------------------- header
         Item {
           width: parent.width
-          implicitHeight: Math.max(title.implicitHeight, subtitle.implicitHeight) + Style.space(4)
+          implicitHeight: Math.max(title.implicitHeight + subtitle.implicitHeight + Style.space(3), refreshButton.implicitHeight)
 
           Text {
             id: title
-            text: "PlugPatcher"
+            text: "\uf0ad  PlugPatcher"
             color: root.fg
             font.family: root.ff
             font.pixelSize: Style.font.title
@@ -144,13 +180,14 @@ Panel {
           Text {
             id: subtitle
             textFormat: Text.PlainText
-            text: root.busy ? root.statusMessage : (root.plugins.length + " user plugins")
-            color: Qt.darker(root.fg, 1.4)
+            text: root.busy ? root.statusMessage
+                            : (root.plugins.length + " plugins · patch without losing updates")
+            color: root.muted
             font.family: root.ff
             font.pixelSize: Style.font.caption
             anchors.left: parent.left
             anchors.top: title.bottom
-            anchors.topMargin: Style.space(2)
+            anchors.topMargin: Style.space(3)
             elide: Text.ElideRight
             width: parent.width - refreshButton.width - Style.space(8)
           }
@@ -165,18 +202,18 @@ Panel {
             fontSize: Style.font.bodySmall
             bordered: true
             enabled: !root.busy
-            horizontalPadding: Style.space(8)
-            verticalPadding: Style.space(3)
+            horizontalPadding: Style.space(10)
+            verticalPadding: Style.space(4)
             onClicked: root.refresh()
           }
         }
 
-        PanelSeparator { foreground: root.fg }
+        PanelSeparator { foreground: Util.alpha(root.fg, 0.15) }
 
-        // ---------------- plugin list ----------------
+        // ---------------------------------------------------------- list
         Flickable {
           width: parent.width
-          height: Math.min(pluginColumn.implicitHeight, Style.space(430))
+          height: Math.min(pluginColumn.implicitHeight, Style.space(470))
           contentWidth: width
           contentHeight: pluginColumn.implicitHeight
           clip: true
@@ -185,112 +222,155 @@ Panel {
           Column {
             id: pluginColumn
             width: parent.width
-            spacing: Style.space(6)
+            spacing: Style.space(8)
 
             Repeater {
               model: root.plugins
 
-              Item {
+              Rectangle {
                 required property var modelData
                 width: pluginColumn.width
-                implicitHeight: rowColumn.implicitHeight
+                implicitHeight: card.implicitHeight
+                color: "transparent"
 
-                Column {
-                  id: rowColumn
+                Rectangle {
+                  id: card
                   width: parent.width
-                  spacing: Style.space(3)
+                  implicitHeight: cardColumn.implicitHeight + Style.space(20)
+                  radius: Style.cornerRadius
+                  color: root.cardBg
+                  border.width: 1
+                  border.color: root.cardBorder
 
-                  Text {
-                    text: modelData.name || modelData.id
-                    color: root.fg
-                    font.family: root.ff
-                    font.pixelSize: Style.font.body
-                    font.bold: true
-                    elide: Text.ElideRight
-                    width: parent.width
-                  }
+                  Column {
+                    id: cardColumn
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    anchors.verticalCenter: parent.verticalCenter
+                    anchors.leftMargin: Style.space(12)
+                    anchors.rightMargin: Style.space(12)
+                    spacing: Style.space(8)
 
-                  Text {
-                    textFormat: Text.PlainText
-                    text: modelData.id + "  ·  " + root.stateLabel(modelData)
-                    color: Qt.darker(root.fg, 1.5)
-                    font.family: root.ff
-                    font.pixelSize: Style.font.caption
-                    elide: Text.ElideRight
-                    width: parent.width
-                  }
+                    // name + state badge
+                    Item {
+                      width: parent.width
+                      implicitHeight: Math.max(nameText.implicitHeight, badge.implicitHeight)
 
-                  Row {
-                    spacing: Style.space(6)
+                      Text {
+                        id: nameText
+                        textFormat: Text.PlainText
+                        text: modelData.name || modelData.id
+                        color: root.fg
+                        font.family: root.ff
+                        font.pixelSize: Style.font.body
+                        font.bold: true
+                        elide: Text.ElideRight
+                        width: parent.width - badge.width - Style.space(10)
+                        anchors.left: parent.left
+                        anchors.verticalCenter: parent.verticalCenter
+                      }
 
-                    Button {
-                      visible: modelData.state !== "editing"
-                      text: "Set up editing"
-                      foreground: root.fg
-                      fontFamily: root.ff
-                      fontSize: Style.font.bodySmall
-                      bordered: true
-                      enabled: !root.busy
-                      horizontalPadding: Style.space(8)
-                      verticalPadding: Style.space(3)
-                      onClicked: root.runAction(["setup", modelData.id])
+                      Badge {
+                        id: badge
+                        anchors.right: parent.right
+                        anchors.verticalCenter: parent.verticalCenter
+                        label: modelData.state === "editing" ? "patched" : "original"
+                        textColor: modelData.state === "editing" ? Color.accent : root.muted
+                      }
                     }
 
-                    Button {
-                      visible: modelData.state === "editing"
-                      text: "Sync"
-                      foreground: root.fg
-                      fontFamily: root.ff
-                      fontSize: Style.font.bodySmall
-                      bordered: true
-                      enabled: !root.busy
-                      horizontalPadding: Style.space(8)
-                      verticalPadding: Style.space(3)
-                      onClicked: root.runAction(["sync", modelData.id])
+                    Text {
+                      textFormat: Text.PlainText
+                      text: modelData.state === "editing"
+                            ? (modelData.id + "  →  " + modelData.editId)
+                            : modelData.id
+                      color: root.muted
+                      font.family: root.ff
+                      font.pixelSize: Style.font.caption
+                      elide: Text.ElideRight
+                      width: parent.width
                     }
 
-                    Button {
-                      visible: modelData.state === "editing"
-                      text: "Open"
-                      foreground: root.fg
-                      fontFamily: root.ff
-                      fontSize: Style.font.bodySmall
-                      bordered: true
-                      enabled: !root.busy
-                      horizontalPadding: Style.space(8)
-                      verticalPadding: Style.space(3)
-                      onClicked: root.runAction(["open", modelData.id])
+                    // actions
+                    Row {
+                      spacing: Style.space(6)
+
+                      ActionButton {
+                        visible: modelData.state !== "editing"
+                        text: "Patch"
+                        foreground: Color.accent
+                        onClicked: root.runAction(["setup", modelData.id])
+                      }
+
+                      ActionButton {
+                        visible: modelData.state === "editing"
+                        text: "Update origin"
+                        onClicked: root.runAction(["sync", modelData.id])
+                      }
+
+                      ActionButton {
+                        visible: modelData.state === "editing"
+                        text: "Open"
+                        onClicked: root.runAction(["open", modelData.id])
+                      }
+
+                      ActionButton {
+                        visible: modelData.state === "editing"
+                        text: "Editor"
+                        onClicked: root.runAction(["editor", modelData.id])
+                      }
+
+                      ActionButton {
+                        visible: modelData.state === "editing"
+                        text: "Files"
+                        onClicked: root.runAction(["files", modelData.id])
+                      }
+
+                      ActionButton {
+                        visible: modelData.state === "editing" && root.pendingRevert !== modelData.id
+                        text: "Send PR"
+                        onClicked: root.runAction(["pr", modelData.id])
+                      }
+
+                      ActionButton {
+                        visible: modelData.state === "editing" && root.pendingRevert !== modelData.id
+                        text: "Revert"
+                        foreground: root.danger
+                        onClicked: root.pendingRevert = modelData.id
+                      }
                     }
 
-                    Button {
-                      visible: modelData.state === "editing"
-                      text: "PR"
-                      foreground: root.fg
-                      fontFamily: root.ff
-                      fontSize: Style.font.bodySmall
-                      bordered: true
-                      enabled: !root.busy
-                      horizontalPadding: Style.space(8)
-                      verticalPadding: Style.space(3)
-                      onClicked: root.runAction(["pr", modelData.id])
-                    }
+                    // revert confirmation
+                    Row {
+                      visible: modelData.state === "editing" && root.pendingRevert === modelData.id
+                      spacing: Style.space(6)
 
-                    Button {
-                      visible: modelData.state === "editing"
-                      text: "Remove"
-                      foreground: root.fg
-                      fontFamily: root.ff
-                      fontSize: Style.font.bodySmall
-                      bordered: true
-                      enabled: !root.busy
-                      horizontalPadding: Style.space(8)
-                      verticalPadding: Style.space(3)
-                      onClicked: root.runAction(["remove", modelData.id])
+                      Text {
+                        textFormat: Text.PlainText
+                        text: "Revert all edits and restore the original?"
+                        color: root.danger
+                        font.family: root.ff
+                        font.pixelSize: Style.font.bodySmall
+                        anchors.verticalCenter: parent.verticalCenter
+                      }
+
+                      ActionButton {
+                        text: "Yes, revert"
+                        foreground: root.danger
+                        onClicked: {
+                          var target = modelData.id
+                          root.pendingRevert = ""
+                          root.runAction(["revert", target])
+                        }
+                      }
+
+                      ActionButton {
+                        text: "Cancel"
+                        onClicked: root.pendingRevert = ""
+                      }
                     }
                   }
                 }
-
-                PanelSeparator { width: parent.width; foreground: root.fg }
               }
             }
           }

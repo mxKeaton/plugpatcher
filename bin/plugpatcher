@@ -17,9 +17,11 @@
 #   status <id>          details for one plugin
 #   setup <id> [url]     start editing (clone upstream into a per-project repo)
 #   sync <id>            pull upstream into the repo (rebase) and regenerate the clone
-#   pr <id>              push your branch to a fork and open a pull request
-#   remove <id>          stop editing: restore the original, delete the repo
+#   pr <id>              push your branch to a fork and open an AI-described pull request
+#   revert <id>          stop editing: restore the original, delete the repo
 #   open <id>            launch the system default agent in the repo, resuming its session
+#   files <id>           open the patch folder in the default file manager
+#   editor <id>          open the patch folder in the default editor
 #   help                 this text
 
 set -euo pipefail
@@ -332,9 +334,9 @@ cmd_sync() {
 
 # ---------------------------------------------------------------------- remove
 
-cmd_remove() {
+cmd_revert() {
   local id="${1:-}" keep_repo="${2:-}"
-  [[ -n "$id" ]] || die "usage: plugpatcher remove <plugin-id>"
+  [[ -n "$id" ]] || die "usage: plugpatcher revert <plugin-id>"
   is_setup "$id" || die "'$id' is not set up"
   local mf edit_id kinds
   mf="$(meta_file "$id")"
@@ -360,8 +362,8 @@ cmd_remove() {
   fi
   rescan
   write_catalog >/dev/null 2>&1 || true
-  notify "PlugPatcher: removed $id" "Original plugin restored"
-  log "removed '$id'; original is active again"
+  notify "PlugPatcher: reverted $id" "Original plugin restored"
+  log "reverted '$id'; original is active again"
 }
 
 # -------------------------------------------------------------------------- pr
@@ -378,6 +380,48 @@ github_slug() { # url -> owner/repo
   printf '%s' "$url"
 }
 
+# Ask the system default agent for a PR title and body given a diff.
+# Sets PR_TITLE / PR_BODY on success, returns non-zero when no agent can help.
+ai_text_for_diff() {
+  local diff="$1" agent out="" prompt
+  PR_TITLE=""; PR_BODY=""
+  agent="$(omarchy-default-agent 2>/dev/null || true)"
+  [[ -n "$agent" ]] || return 1
+  command -v "$agent" >/dev/null 2>&1 || return 1
+
+  prompt="$(cat <<EOF
+You write GitHub pull requests for a local patch to an Omarchy shell plugin.
+The repository is the upstream plugin and the diff below is the whole change.
+
+Answer with exactly this format and nothing else:
+TITLE: <one concise line>
+BODY:
+<markdown body: what changed and why>
+
+Diff:
+$diff
+EOF
+)"
+
+  case "$agent" in
+    pi)       out="$(timeout 120 pi -p "$prompt" 2>/dev/null || true)" ;;
+    claude)   out="$(timeout 120 claude -p "$prompt" 2>/dev/null || true)" ;;
+    opencode) out="$(timeout 120 opencode run "$prompt" 2>/dev/null || true)" ;;
+    codex)    out="$(timeout 120 codex exec "$prompt" 2>/dev/null || true)" ;;
+    gemini)   out="$(timeout 120 gemini -p "$prompt" 2>/dev/null || true)" ;;
+    omp)      out="$(timeout 120 omp -p "$prompt" 2>/dev/null || true)" ;;
+    *)        return 1 ;;
+  esac
+  [[ -n "$out" ]] || return 1
+
+  PR_TITLE="$(printf '%s\n' "$out" | sed -n 's/^[Tt][Ii][Tt][Ll][Ee]:[[:space:]]*//p' | head -n1)"
+  PR_BODY="$(printf '%s\n' "$out" | awk 'p{print} tolower($0) ~ /^body:[[:space:]]*$/ {p=1}')"
+  PR_BODY="$(printf '%s\n' "$PR_BODY" | sed '/./,$!d')"
+  [[ -n "$PR_TITLE" ]] || PR_TITLE="$(printf '%s\n' "$out" | head -n1)"
+  [[ -n "$PR_BODY" ]] || PR_BODY="$out"
+  return 0
+}
+
 cmd_pr() {
   local id="${1:-}"
   [[ -n "$id" ]] || die "usage: plugpatcher pr <plugin-id>"
@@ -391,10 +435,8 @@ cmd_pr() {
   upstream="$(jq -r '.upstream' "$mf")"
 
   slug="$(github_slug "$upstream")" || die "'$id' upstream is not GitHub; push manually from $repo"
-
-  if ! command -v gh >/dev/null 2>&1 || ! gh auth status >/dev/null 2>&1; then
-    die "gh is not authenticated; run: gh auth login"
-  fi
+  command -v gh >/dev/null 2>&1 || die "gh is not installed"
+  gh auth status >/dev/null 2>&1 || die "gh is not authenticated; run: gh auth login"
 
   local me; me="$(gh api user -q .login)"
   local remote_branch="plugpatcher/$id"
@@ -403,12 +445,24 @@ cmd_pr() {
   git -C "$repo" remote remove plugpatcher-fork >/dev/null 2>&1 || true
   git -C "$repo" remote add plugpatcher-fork "$fork_url"
   gh repo fork "$slug" --clone=false >/dev/null 2>&1 || true
+  log "pushing to $me:${slug#*/}"
   git -C "$repo" push -q -u plugpatcher-fork "$branch:$remote_branch"
 
-  local body
-  body="$(printf 'Changes made with [PlugPatcher](https://github.com/%s/PlugPatcher).\n\n%s\n' "$me" "")"
+  local diff pr_title pr_body
+  diff="$(git -C "$repo" diff "origin/$ub...$branch" 2>/dev/null | head -c 20000 || true)"
+  if ai_text_for_diff "$diff"; then
+    pr_title="$PR_TITLE"; pr_body="$PR_BODY"
+    log "wrote the PR title and description with '$agent'"
+  else
+    warn "no default agent output; using a generic PR description"
+    pr_title="$(git -C "$repo" log -1 --format=%s "$branch" 2>/dev/null || true)"
+    [[ -n "$pr_title" ]] || pr_title="PlugPatcher changes for $id"
+    pr_body="Changes made with PlugPatcher."
+  fi
+  pr_body="$(printf '%s\n\n---\n_Made with PlugPatcher._\n' "$pr_body")"
+
   gh pr create --repo "$slug" --base "$ub" --head "$me:$remote_branch" \
-    --title "PlugPatcher changes for $id" --body "$body"
+    --title "$pr_title" --body "$pr_body"
 }
 
 # ------------------------------------------------------------------------ open
@@ -440,6 +494,32 @@ cmd_open() {
   log "opening $agent in $repo"
   cd "$repo"
   exec omarchy-launch-tui --app-id=org.omarchy.agent "${cmd[@]}"
+}
+
+# Open the per-project patch folder in the default file manager.
+cmd_open_files() {
+  local id="${1:-}"
+  [[ -n "$id" ]] || die "usage: plugpatcher files <plugin-id>"
+  is_setup "$id" || die "'$id' is not set up"
+  local repo; repo="$(repo_dir "$id")"
+  log "opening patch folder: $repo"
+  if command -v xdg-open >/dev/null 2>&1; then
+    setsid uwsm-app -- xdg-open "$repo" >/dev/null 2>&1 &
+  elif command -v nautilus >/dev/null 2>&1; then
+    setsid uwsm-app -- nautilus "$repo" >/dev/null 2>&1 &
+  else
+    die "no file manager found"
+  fi
+}
+
+# Open the per-project patch folder in the default editor.
+cmd_open_editor() {
+  local id="${1:-}"
+  [[ -n "$id" ]] || die "usage: plugpatcher editor <plugin-id>"
+  is_setup "$id" || die "'$id' is not set up"
+  local repo; repo="$(repo_dir "$id")"
+  log "opening editor in: $repo"
+  setsid omarchy-launch-editor "$repo" >/dev/null 2>&1 &
 }
 
 # ------------------------------------------------------------------ list/status
@@ -542,7 +622,26 @@ cmd_status() {
 # ------------------------------------------------------------------------ help
 
 usage() {
-  sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'
+  cat <<'USAGE'
+plugpatcher — edit Omarchy shell plugins while keeping the original pristine
+and updatable.
+
+  original plugin   ~/.config/omarchy/plugins/<id>          (untouched, omarchy-updatable)
+  per-project repo  ~/.local/share/plugpatcher/<id>/        (git clone of upstream + your branch)
+  generated clone   ~/.config/omarchy/plugins/local.<seg>/  (what the shell loads)
+
+Commands:
+  list                 installed plugins and their edit state
+  status <id>          details for one plugin
+  setup <id> [url]     start editing (clone upstream into a per-project repo)
+  sync <id>            pull upstream into the repo (rebase) and regenerate the clone
+  pr <id>              push your branch to a fork and open an AI-described PR
+  revert <id>          stop editing: restore the original, delete the clone
+  open <id>            launch the default agent in the repo, resuming its session
+  files <id>           open the patch folder in the default file manager
+  editor <id>          open the patch folder in the default editor
+  help                 this text
+USAGE
 }
 
 # ---------------------------------------------------------------------- driver
@@ -557,8 +656,10 @@ main() {
     setup)        cmd_setup "$@" ;;
     sync)         cmd_sync "$@" ;;
     pr)           cmd_pr "$@" ;;
-    remove|rm)    cmd_remove "$@" ;;
+    revert|remove|rm) cmd_revert "$@" ;;
     open)         cmd_open "$@" ;;
+    files)        cmd_open_files "$@" ;;
+    editor)       cmd_open_editor "$@" ;;
     help|-h|--help) usage ;;
     version|--version) echo "plugpatcher $VERSION" ;;
     *) die "unknown command '$cmd' (try: plugpatcher help)" ;;
