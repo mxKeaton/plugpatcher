@@ -285,9 +285,9 @@ Panel {
 
           Repeater {
             model: [
+              { key: "edits", label: "Edited" },
               { key: "name", label: "Name" },
-              { key: "edits", label: "Last Edited" },
-              { key: "updates", label: "Last Updated" },
+              { key: "updates", label: "Updated" },
               { key: "id", label: "ID" }
             ]
 
