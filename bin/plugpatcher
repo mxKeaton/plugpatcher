@@ -600,14 +600,34 @@ cmd_pr() {
   gh auth status >/dev/null 2>&1 || die "gh is not authenticated; run: gh auth login"
 
   local me; me="$(gh api user -q .login)"
-  local remote_branch="plugpatcher/$id"
   local fork_url="https://github.com/$me/${slug#*/}.git"
 
   git -C "$repo" remote remove plugpatcher-fork >/dev/null 2>&1 || true
   git -C "$repo" remote add plugpatcher-fork "$fork_url"
   gh repo fork "$slug" --clone=false >/dev/null 2>&1 || true
-  log "pushing to $me:${slug#*/}"
-  git -C "$repo" push -q -u plugpatcher-fork "$branch:$remote_branch"
+
+  # Give each distinct patch its own branch, so a new round of changes opens a
+  # new PR instead of failing because an old PR still exists. patch-id is
+  # stable across rebases, so the same changes always map to the same branch.
+  local remote_branch base pid
+  remote_branch="plugpatcher/$id"
+  base="$(git -C "$repo" merge-base "$branch" "origin/$ub" 2>/dev/null || true)"
+  if [[ -n "$base" ]]; then
+    pid="$(git -C "$repo" diff "$base" "$branch" 2>/dev/null | git patch-id --stable 2>/dev/null | awk 'NR==1{print $1}')"
+  fi
+  [[ -n "$pid" ]] && remote_branch="plugpatcher/$id-${pid:0:10}"
+
+  log "pushing to $me:${slug#*/} ($remote_branch)"
+  git -C "$repo" push -q -f -u plugpatcher-fork "$branch:$remote_branch"
+
+  # Same patch already reviewed? Point at it rather than failing.
+  local existing
+  existing="$(gh pr list --repo "$slug" --head "$me:$remote_branch" --state open --json url -q '.[0].url' 2>/dev/null || true)"
+  if [[ -n "$existing" ]]; then
+    log "a pull request for these exact changes already exists: $existing"
+    printf '%s\n' "$existing"
+    return 0
+  fi
 
   local diff pr_title pr_body
   diff="$(git -C "$repo" diff "origin/$ub...$branch" 2>/dev/null | head -c 20000 || true)"
