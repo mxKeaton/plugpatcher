@@ -452,7 +452,7 @@ Panel {
 
             Repeater {
               model: [
-                { key: "edits", label: "Edited" },
+                { key: "edits", label: "Patched" },
                 { key: "name", label: "Name" },
                 { key: "id", label: "ID" }
               ]
