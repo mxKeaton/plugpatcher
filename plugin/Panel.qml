@@ -108,6 +108,7 @@ Panel {
     if (a === "delete") return "Deleting…"
     if (a === "use" || a === "switch") return "Switching install…"
     if (a === "open") return "Opening…"
+    if (a === "update-all") return "Opening a terminal…"
     if (a === "editor") return "Opening the editor…"
     if (a === "files") return "Opening the folder…"
     return "Working…"
@@ -403,33 +404,49 @@ Panel {
 
         PanelSeparator { foreground: Util.alpha(root.fg, 0.15) }
 
-        // ---------------------------------------------------------- sort
-        Row {
+        // ---------------------------------------------------------- toolbar
+        Item {
           visible: !root.settingsOpen
-          spacing: Style.space(6)
+          width: parent.width
+          implicitHeight: Math.max(sortRow.implicitHeight, updatePluginsButton.implicitHeight)
 
-          Text {
-            text: "Sort"
-            color: root.muted
-            font.family: root.ff
-            font.pixelSize: Style.font.caption
+          Row {
+            id: sortRow
+            anchors.left: parent.left
             anchors.verticalCenter: parent.verticalCenter
+            spacing: Style.space(6)
+
+            Text {
+              text: "Sort"
+              color: root.muted
+              font.family: root.ff
+              font.pixelSize: Style.font.caption
+              anchors.verticalCenter: parent.verticalCenter
+            }
+
+            Repeater {
+              model: [
+                { key: "name", label: "Name" },
+                { key: "id", label: "ID" },
+                { key: "edits", label: "Edited" },
+                { key: "updates", label: "Updated" }
+              ]
+
+              ActionButton {
+                required property var modelData
+                text: modelData.label
+                selected: root.sortBy === modelData.key
+                onClicked: root.sortBy = modelData.key
+              }
+            }
           }
 
-          Repeater {
-            model: [
-              { key: "name", label: "Name" },
-              { key: "id", label: "ID" },
-              { key: "edits", label: "Edited" },
-              { key: "updates", label: "Updated" }
-            ]
-
-            ActionButton {
-              required property var modelData
-              text: modelData.label
-              selected: root.sortBy === modelData.key
-              onClicked: root.sortBy = modelData.key
-            }
+          ActionButton {
+            id: updatePluginsButton
+            anchors.right: parent.right
+            anchors.verticalCenter: parent.verticalCenter
+            text: "Update Plugins"
+            onClicked: root.runAction(["update-all"])
           }
         }
 

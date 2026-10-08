@@ -920,6 +920,14 @@ cmd_heal() {
   write_catalog >/dev/null 2>&1 || true
 }
 
+# Open a terminal and update every plugin with Omarchy's own updater.
+cmd_update_all() {
+  command -v omarchy-launch-floating-terminal-with-presentation >/dev/null 2>&1 || \
+    die "omarchy-launch-floating-terminal-with-presentation is not available"
+  log "opening a terminal to update all plugins"
+  setsid omarchy-launch-floating-terminal-with-presentation "omarchy plugin update --yes" >/dev/null 2>&1 &
+}
+
 cmd_list() {
   need jq
   local entries; entries="$(write_catalog)"
@@ -988,6 +996,7 @@ Commands:
   editor <id>          open the patch folder in the default editor
   config [k] [v]       show or set config (config.json)
   heal                 re-activate adopted clones that went dormant
+  update-all           open a terminal and run 'omarchy plugin update --yes'
   settings             machine-readable settings for the panel (JSON)
   help                 this text
 USAGE
@@ -1013,6 +1022,7 @@ main() {
     editor)       cmd_open_editor "$@" ;;
     config)       cmd_config "$@" ;;
     heal)         cmd_heal "$@" ;;
+    update-all)   cmd_update_all "$@" ;;
     settings)     cmd_settings "$@" ;;
     help|-h|--help) usage ;;
     version|--version) echo "plugpatcher $VERSION" ;;
