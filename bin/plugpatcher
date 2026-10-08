@@ -194,6 +194,18 @@ touch_want() {
   fi
 }
 
+# Set an arbitrary key in a plugin's metadata.
+meta_set() { # id key value
+  local mf; mf="$(meta_file "$1")"
+  [[ -f "$mf" ]] || return 0
+  local tmp; tmp="$(mktemp)"
+  if jq --arg k "$2" --arg v "$3" '.[$k] = $v' "$mf" > "$tmp"; then
+    mv "$tmp" "$mf"
+  else
+    rm -f "$tmp"
+  fi
+}
+
 wait_discovered() { # id
   local id="$1" i
   for (( i = 0; i < 60; i++ )); do
@@ -620,11 +632,14 @@ cmd_pr() {
   log "pushing to $me:${slug#*/} ($remote_branch)"
   git -C "$repo" push -q -f -u plugpatcher-fork "$branch:$remote_branch"
 
-  # Same patch already reviewed? Point at it rather than failing.
+  # Same patch already reviewed? Point at it rather than failing. gh wants
+  # "owner:branch" for cross-repo PRs but a bare branch for same-repo ones.
   local existing
-  existing="$(gh pr list --repo "$slug" --head "$me:$remote_branch" --state open --json url -q '.[0].url' 2>/dev/null || true)"
+  existing="$(gh pr list --repo "$slug" --head "$me:$remote_branch" --state open --json url --jq '.[0].url // empty' 2>/dev/null || true)"
+  [[ -n "$existing" ]] || existing="$(gh pr list --repo "$slug" --head "$remote_branch" --state open --json url --jq '.[0].url // empty' 2>/dev/null || true)"
   if [[ -n "$existing" ]]; then
     log "a pull request for these exact changes already exists: $existing"
+    meta_set "$id" lastPr "$existing"
     printf '%s\n' "$existing"
     return 0
   fi
@@ -642,8 +657,28 @@ cmd_pr() {
   fi
   pr_body="$(printf '%s\n\n---\n_Made with PlugPatcher._\n' "$pr_body")"
 
-  gh pr create --repo "$slug" --base "$ub" --head "$me:$remote_branch" \
-    --title "$pr_title" --body "$pr_body"
+  local pr_url
+  pr_url="$(gh pr create --repo "$slug" --base "$ub" --head "$me:$remote_branch" \
+    --title "$pr_title" --body "$pr_body")" || die "gh pr create failed"
+  meta_set "$id" lastPr "$pr_url"
+  printf '%s\n' "$pr_url"
+}
+
+# Close the pull request most recently opened for a plugin.
+cmd_pr_cancel() {
+  local id="${1:-}"
+  [[ -n "$id" ]] || die "usage: plugpatcher pr-cancel <plugin-id>"
+  is_setup "$id" || die "'$id' is not set up"
+  need gh
+  local mf url
+  mf="$(meta_file "$id")"
+  url="$(jq -r '.lastPr // empty' "$mf" 2>/dev/null || true)"
+  [[ -n "$url" ]] || die "no pull request is recorded for '$id'"
+  gh pr close "$url" --comment "Withdrawn via PlugPatcher." >/dev/null 2>&1 \
+    || die "could not close $url"
+  meta_set "$id" lastPr ""
+  log "closed $url"
+  printf 'closed %s\n' "$url"
 }
 
 # ------------------------------------------------------------------------ open
@@ -1017,6 +1052,7 @@ Commands:
   config [k] [v]       show or set config (config.json)
   heal                 re-activate adopted clones that went dormant
   update-all           open a terminal and run 'omarchy plugin update --yes'
+  pr-cancel <id>       close the pull request most recently opened for <id>
   settings             machine-readable settings for the panel (JSON)
   help                 this text
 USAGE
@@ -1043,6 +1079,7 @@ main() {
     config)       cmd_config "$@" ;;
     heal)         cmd_heal "$@" ;;
     update-all)   cmd_update_all "$@" ;;
+    pr-cancel|unpr|cancel-pr) cmd_pr_cancel "$@" ;;
     settings)     cmd_settings "$@" ;;
     help|-h|--help) usage ;;
     version|--version) echo "plugpatcher $VERSION" ;;

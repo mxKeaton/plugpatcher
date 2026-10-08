@@ -43,7 +43,8 @@ The clone carries `omarchy.clonedFrom = <id>`, so the shell:
 | `plugpatcher status <id>` | repo/branch/upstream ahead-behind for one plugin |
 | `plugpatcher setup <id> [url]` | start editing: clone upstream into the repo, generate the clone, switch to it |
 | `plugpatcher sync <id>` | `git fetch` upstream, rebase your branch, regenerate the clone; aborts on conflict |
-| `plugpatcher pr <id>` | fork if needed, push your branch, open a PR against upstream |
+| `plugpatcher pr <id>` | fork if needed, push your branch, open a PR against upstream (one branch per patch) |
+| `plugpatcher pr-cancel <id>` | close the PR most recently opened for `<id>` (also `unpr`) |
 | `plugpatcher revert <id>` | restore the original, delete/backup the repo |
 | `plugpatcher use <id> <side>` | switch the loaded plugin: `patched` or `original` (enable/disable only) |
 | `plugpatcher delete <id> <side>` | delete `original`, `patched`, or `both` |
@@ -83,8 +84,11 @@ JSON (the panel uses it for its dropdowns).
    lines, `sync` aborts, changes nothing, and notifies; resolve the rebase in
    the repo, then run `sync` again.
 5. **To PR**: `plugpatcher pr <id>` (uses `gh`, which Omarchy sets up as the git
-   credential helper). The `local.<seg>` manifest rewrite never enters the PR —
-   it is applied only at clone-generation time.
+   credential helper). Each distinct patch gets its own branch
+   (`plugpatcher/<id>-<patch-id>`), so a new round of changes opens a new PR;
+   re-running for an unchanged patch just reports the existing PR URL. Close it
+   with `plugpatcher pr-cancel <id>`. The `local.<seg>` manifest rewrite never
+   enters the PR — it is applied only at clone-generation time.
 6. **Never** edit `/usr/share/omarchy`, and never run destructive git commands
    in the original plugin dir. The original remains the updatable baseline.
 7. **To stop editing**: `plugpatcher remove <id>` restores the original.

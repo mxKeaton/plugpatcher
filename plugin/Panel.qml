@@ -38,6 +38,7 @@ Panel {
   property bool feedbackError: false
   property string progress: ""        // text shown while an action runs
   property string lastAction: ""      // verb of the running/last action
+  property string lastActionId: ""    // plugin id of the running/last action
   property bool cliAvailable: true
   property bool settingsOpen: false
   property string picking: ""          // "" | "harness" | "model"
@@ -104,6 +105,7 @@ Panel {
     if (a === "setup") return "Setting up editing…"
     if (a === "sync") return "Updating from origin…"
     if (a === "pr") return "Pushing and writing the PR description… (this can take a moment)"
+    if (a === "pr-cancel") return "Closing the pull request…"
     if (a === "revert") return "Reverting to the original…"
     if (a === "delete") return "Deleting…"
     if (a === "use" || a === "switch") return "Switching install…"
@@ -124,6 +126,7 @@ Panel {
     pendingConfigChange = false
     busy = true
     lastAction = String(args[0] || "")
+    lastActionId = String(args[1] || "")
     progress = progressFor(args)
     feedback = ""
     feedbackError = false
@@ -482,10 +485,20 @@ Panel {
               width: parent.width
             }
 
-            ActionButton {
-              visible: !root.busy
-              text: "Dismiss"
-              onClicked: root.feedback = ""
+            Row {
+              spacing: Style.space(6)
+
+              ActionButton {
+                visible: !root.busy && root.lastAction === "pr" && root.lastActionId !== ""
+                text: "Cancel PR"
+                onClicked: root.runAction(["pr-cancel", root.lastActionId])
+              }
+
+              ActionButton {
+                visible: !root.busy
+                text: "Dismiss"
+                onClicked: root.feedback = ""
+              }
             }
           }
         }
