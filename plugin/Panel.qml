@@ -631,10 +631,10 @@ Panel {
                     anchors.rightMargin: Style.space(12)
                     spacing: Style.space(8)
 
-                    // name + state switch
+                    // name (the switch column floats over the card, top-right)
                     Item {
                       width: parent.width
-                      implicitHeight: Math.max(nameText.implicitHeight, switchCol.implicitHeight)
+                      implicitHeight: nameText.implicitHeight
 
                       Text {
                         id: nameText
@@ -648,47 +648,6 @@ Panel {
                         width: parent.width - switchCol.width - Style.space(10)
                         anchors.left: parent.left
                         anchors.verticalCenter: parent.verticalCenter
-                      }
-
-                      // Current side, an arrow, then the other side. Clicking the
-                      // other side switches which install is loaded.
-                      Column {
-                        id: switchCol
-                        anchors.right: parent.right
-                        anchors.verticalCenter: parent.verticalCenter
-                        spacing: Style.space(2)
-
-                        Badge {
-                          anchors.horizontalCenter: parent.horizontalCenter
-                          widthRef: "original"
-                          label: root.stateLabel(modelData)
-                          textColor: root.stateColor(modelData)
-                        }
-
-                        Text {
-                          visible: modelData.state === "editing"
-                          anchors.horizontalCenter: parent.horizontalCenter
-                          text: "\uf063"
-                          color: root.muted
-                          font.family: root.ff
-                          font.pixelSize: Style.font.caption
-                        }
-
-                        Badge {
-                          id: otherBadge
-                          visible: modelData.state === "editing"
-                          anchors.horizontalCenter: parent.horizontalCenter
-                          factor: 2 / 3
-                          widthRef: "original"
-                          label: modelData.cloneEnabled ? "original" : "patched"
-                          textColor: root.badgeColorFor(modelData.cloneEnabled ? "original" : "patched")
-
-                          MouseArea {
-                            anchors.fill: parent
-                            cursorShape: Qt.PointingHandCursor
-                            onClicked: root.runAction(["use", modelData.id, modelData.cloneEnabled ? "original" : "patched"])
-                          }
-                        }
                       }
                     }
 
@@ -814,6 +773,50 @@ Panel {
                       ActionButton {
                         text: "Cancel"
                         onClicked: root.pendingDelete = ""
+                      }
+                    }
+                  }
+
+                  // Switch column: floats at the card's top-right, aligned with
+                  // the name, and does not affect the content's spacing.
+                  Column {
+                    id: switchCol
+                    z: 1
+                    anchors.right: parent.right
+                    anchors.rightMargin: Style.space(12)
+                    anchors.top: parent.top
+                    anchors.topMargin: Style.space(10)
+                    spacing: Style.space(2)
+
+                    Badge {
+                      anchors.horizontalCenter: parent.horizontalCenter
+                      widthRef: "original"
+                      label: root.stateLabel(modelData)
+                      textColor: root.stateColor(modelData)
+                    }
+
+                    Text {
+                      visible: modelData.state === "editing"
+                      anchors.horizontalCenter: parent.horizontalCenter
+                      text: "\uf063"
+                      color: root.muted
+                      font.family: root.ff
+                      font.pixelSize: Style.font.caption
+                    }
+
+                    Badge {
+                      id: otherBadge
+                      visible: modelData.state === "editing"
+                      anchors.horizontalCenter: parent.horizontalCenter
+                      factor: 2 / 3
+                      widthRef: "original"
+                      label: modelData.cloneEnabled ? "original" : "patched"
+                      textColor: root.badgeColorFor(modelData.cloneEnabled ? "original" : "patched")
+
+                      MouseArea {
+                        anchors.fill: parent
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: root.runAction(["use", modelData.id, modelData.cloneEnabled ? "original" : "patched"])
                       }
                     }
                   }
