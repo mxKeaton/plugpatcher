@@ -442,13 +442,7 @@ Panel {
 
                       ActionButton {
                         visible: modelData.state === "editing"
-                        text: "Update origin"
-                        onClicked: root.runAction(["sync", modelData.id])
-                      }
-
-                      ActionButton {
-                        visible: modelData.state === "editing"
-                        text: "Open"
+                        text: "AI"
                         onClicked: root.runAction(["open", modelData.id])
                       }
 
@@ -460,8 +454,14 @@ Panel {
 
                       ActionButton {
                         visible: modelData.state === "editing"
-                        text: "Files"
+                        text: "Browse"
                         onClicked: root.runAction(["files", modelData.id])
+                      }
+
+                      ActionButton {
+                        visible: modelData.state === "editing"
+                        text: "Update"
+                        onClicked: root.runAction(["sync", modelData.id])
                       }
 
                       ActionButton {
