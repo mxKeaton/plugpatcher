@@ -659,7 +659,9 @@ cmd_settings() {
 # ------------------------------------------------------------------ list/status
 
 enabled_map() {
-  omarchy-shell -q shell listPlugins 2>/dev/null |
+  # NOTE: no -q here — it suppresses stdout, which would make every plugin look
+  # disabled (and send heal into a re-enable loop).
+  omarchy-shell shell listPlugins 2>/dev/null |
     jq -r '.[] | "\(.id)\t\(.enabled)\t\(.active)"' 2>/dev/null || true
 }
 
@@ -747,21 +749,45 @@ cmd_heal() {
   need jq
   local enabled; enabled="$(enabled_map)"
   local mfile sid edit_id clone_enabled
+  local -a rebuilt=() activate=()
   while IFS= read -r mfile; do
     [[ -n "$mfile" ]] || continue
     sid="$(jq -r '.sourceId // empty' "$mfile" 2>/dev/null || true)"
     edit_id="$(jq -r '.editId // empty' "$mfile" 2>/dev/null || true)"
     [[ -n "$sid" && -n "$edit_id" ]] || continue
-    # Only heal when both the original and the clone still exist (orphans are
-    # left for the user to Delete).
-    [[ -d "$(plugin_dir "$sid")" && -d "$(plugin_dir "$edit_id")" ]] || continue
-    clone_enabled="$(awk -F '\t' -v id="$edit_id" '$1 == id { print $2 }' <<<"$enabled")"
-    if [[ "$clone_enabled" != "true" ]]; then
-      log "re-activating $edit_id"
-      ensure_active "$sid"
+    # Orphaned (original gone): nothing to heal, the panel offers Delete.
+    [[ -d "$(plugin_dir "$sid")" ]] || continue
+
+    if [[ ! -d "$(plugin_dir "$edit_id")" ]]; then
+      # Metadata without a clone: rebuild it from the repo.
+      if [[ -d "$(repo_dir "$sid")" ]]; then
+        log "rebuilding missing clone $edit_id"
+        generate_clone "$sid" && rebuilt+=("$sid")
+      fi
+      continue
     fi
+    clone_enabled="$(awk -F '\t' -v id="$edit_id" '$1 == id { print $2 }' <<<"$enabled")"
+    [[ "$clone_enabled" != "true" ]] && activate+=("$sid")
   done < <(find "$DATA_DIR" -mindepth 1 -maxdepth 1 -name '*.json' ! -name 'catalog.json' -print 2>/dev/null)
-  rescan
+
+  # A rebuilt clone must be discovered by the shell before it can be enabled.
+  if (( ${#rebuilt[@]} )); then
+    rescan
+    sleep 0.3
+    activate+=("${rebuilt[@]}")
+  fi
+
+  local s e
+  for s in "${activate[@]}"; do
+    [[ -n "$s" ]] || continue
+    e="$(jq -r '.editId // empty' "$(meta_file "$s")" 2>/dev/null || true)"
+    [[ -n "$e" ]] && wait_discovered "$e" 2>/dev/null || true
+    log "re-activating $e"
+    ensure_active "$s"
+  done
+
+  # Always refresh the catalog (a read); only ever poke the shell above, and
+  # only when there was something to heal.
   write_catalog >/dev/null 2>&1 || true
 }
 
