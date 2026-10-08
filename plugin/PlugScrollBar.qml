@@ -24,14 +24,11 @@ Item {
   }
 
   visible: scrollable
-  implicitWidth: Style.space(16)
+  implicitWidth: Style.space(14)
 
   Rectangle {
     id: track
-    anchors.horizontalCenter: parent.horizontalCenter
-    y: 0
-    width: Style.space(10)
-    height: root.height
+    anchors.fill: parent
     radius: width / 2
     color: Util.alpha(root.foreground, 0.08)
   }
@@ -40,7 +37,7 @@ Item {
     id: handle
     anchors.horizontalCenter: parent.horizontalCenter
     y: root.handleY
-    width: Style.space(6)
+    width: Style.space(7)
     height: root.handleHeight
     radius: width / 2
     color: Util.alpha(root.foreground, dragArea.pressed ? 0.6 : 0.38)

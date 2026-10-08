@@ -42,6 +42,11 @@ Panel {
   property bool pendingConfigChange: false
   property var settings: ({ harness: "default", model: "", command: "", harnesses: [], models: [] })
 
+  // Scrollbar geometry: barW is the visible width; barPush slides it right into
+  // the panel's padding so it uses that space instead of leaving a gap.
+  readonly property int barW: Style.space(18)
+  readonly property int barPush: Style.space(8)
+
   Component.onCompleted: cliCheck.running = true
 
   // The CLI lives outside the plugin, so make sure it exists before actions.
@@ -489,7 +494,7 @@ Panel {
               anchors.left: parent.left
               anchors.top: parent.top
               anchors.bottom: parent.bottom
-              width: parent.width - pickBar.width - Style.space(6)
+              width: parent.width - (root.barW + Style.space(6) - root.barPush)
               contentWidth: width
               contentHeight: pickColumn.implicitHeight
               clip: true
@@ -529,7 +534,9 @@ Panel {
             PlugScrollBar {
               id: pickBar
               z: 5
+              width: root.barW
               anchors.right: parent.right
+              anchors.rightMargin: -root.barPush
               anchors.top: parent.top
               anchors.bottom: parent.bottom
               flickable: pickFlick
@@ -550,7 +557,7 @@ Panel {
           anchors.left: parent.left
           anchors.top: parent.top
           anchors.bottom: parent.bottom
-          width: parent.width - listBar.width - Style.space(6)
+          width: parent.width - (root.barW + Style.space(6) - root.barPush)
           contentWidth: width
           contentHeight: pluginColumn.implicitHeight
           clip: true
@@ -728,7 +735,9 @@ Panel {
           PlugScrollBar {
             id: listBar
             z: 5
+            width: root.barW
             anchors.right: parent.right
+            anchors.rightMargin: -root.barPush
             anchors.top: parent.top
             anchors.bottom: parent.bottom
             flickable: listFlick
