@@ -407,6 +407,65 @@ cmd_revert() {
   log "reverted '$id'; original is active again"
 }
 
+# Switch between the patched clone and the original (enable/disable only).
+cmd_use() {
+  local id="${1:-}" want="${2:-}"
+  [[ -n "$id" ]] || die "usage: plugpatcher use <plugin-id> <patched|original>"
+  is_setup "$id" || die "'$id' is not set up"
+  local mf edit_id kinds
+  mf="$(meta_file "$id")"
+  edit_id="$(jq -r '.editId' "$mf")"
+  kinds="$(jq -r '(.kinds // []) | join(",")' "$(manifest_path "$id")" 2>/dev/null || true)"
+
+  case "$want" in
+    patched)
+      ensure_active "$id" ;;
+    original)
+      if [[ ",$kinds," == *",bar,"* ]]; then
+        omarchy bar use "$id" >/dev/null 2>&1 || true
+      fi
+      omarchy plugin disable "$edit_id" >/dev/null 2>&1 || true
+      omarchy plugin enable "$id" >/dev/null 2>&1 || true ;;
+    *)
+      die "usage: plugpatcher use <plugin-id> <patched|original>" ;;
+  esac
+
+  rescan
+  write_catalog >/dev/null 2>&1 || true
+  log "switched '$id' to $want"
+}
+
+# Delete one or both sides: original, patched, or both.
+cmd_delete() {
+  local id="${1:-}" what="${2:-}"
+  [[ -n "$id" && "$what" =~ ^(original|patched|both)$ ]] || \
+    die "usage: plugpatcher delete <plugin-id> <original|patched|both>"
+  is_setup "$id" || die "'$id' is not set up"
+  local mf edit_id
+  mf="$(meta_file "$id")"
+  edit_id="$(jq -r '.editId' "$mf")"
+
+  if [[ "$what" == "original" || "$what" == "both" ]]; then
+    if [[ -d "$(plugin_dir "$id")" ]]; then
+      omarchy plugin remove "$id" --yes >/dev/null 2>&1 || rm -rf "$(plugin_dir "$id")"
+    fi
+  fi
+
+  if [[ "$what" == "patched" || "$what" == "both" ]]; then
+    omarchy plugin disable "$edit_id" >/dev/null 2>&1 || true
+    rm -rf "$(plugin_dir "$edit_id")"
+    rm -f "$mf"
+    local backup="$STATE_DIR/removed/$id-$(date -u +%Y%m%d%H%M%S)"
+    mkdir -p "$(dirname "$backup")"
+    [[ -d "$(repo_dir "$id")" ]] && mv "$(repo_dir "$id")" "$backup" || true
+  fi
+
+  rescan
+  write_catalog >/dev/null 2>&1 || true
+  notify "PlugPatcher: deleted $what" "$id"
+  log "deleted $what for '$id'"
+}
+
 # -------------------------------------------------------------------------- pr
 
 github_slug() { # url -> owner/repo
@@ -730,10 +789,16 @@ write_catalog() {
     done < <(find "$DATA_DIR" -mindepth 1 -maxdepth 1 -name '*.json' ! -name 'catalog.json' -print 2>/dev/null)
 
     entries="$(jq -n --argjson e "$entries" --arg enabled "$enabled" '
-      $e | map(. as $p
-        | ($p.editId // $p.id) as $look
-        | (($enabled | split("\n") | map(select(length>0) | split("\t")) | map(select(.[0]==$look)) | .[0]) // []) as $s
-        | $p + {enabled: (($s[1] // "false") == "true"), active: (($s[2] // "false") == "true")})
+      ($enabled | split("\n") | map(select(length>0) | split("\t"))) as $rows
+      | $e | map(. as $p
+        | (($rows | map(select(.[0]==$p.id)) | .[0]) // []) as $src
+        | (($rows | map(select(.[0]==($p.editId // $p.id))) | .[0]) // []) as $cln
+        | $p + {
+            sourceEnabled: (($src[1] // "false") == "true"),
+            cloneEnabled: (($cln[1] // "false") == "true"),
+            enabled: (if ($p.editId // null) != null then (($cln[1] // "false") == "true") else (($src[1] // "false") == "true") end),
+            active: (if ($p.editId // null) != null then (($cln[2] // "false") == "true") else (($src[2] // "false") == "true") end)
+          })
     ' 2>/dev/null || printf '%s' "$entries")"
   fi
   jq -n --argjson plugins "$entries" --arg updatedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
@@ -852,6 +917,8 @@ Commands:
   sync <id>            pull upstream into the repo (rebase) and regenerate the clone
   pr <id>              push your branch to a fork and open an AI-described PR
   revert <id>          stop editing: restore the original, delete the clone
+  use <id> <side>      switch the loaded plugin: patched | original
+  delete <id> <side>   delete original | patched | both
   open <id>            launch the default agent in the repo, resuming its session
   files <id>           open the patch folder in the default file manager
   editor <id>          open the patch folder in the default editor
@@ -875,6 +942,8 @@ main() {
     sync)         cmd_sync "$@" ;;
     pr)           cmd_pr "$@" ;;
     revert|remove|rm) cmd_revert "$@" ;;
+    use|switch)   cmd_use "$@" ;;
+    delete|del)   cmd_delete "$@" ;;
     open)         cmd_open "$@" ;;
     files)        cmd_open_files "$@" ;;
     editor)       cmd_open_editor "$@" ;;

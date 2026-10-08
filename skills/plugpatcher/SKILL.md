@@ -44,7 +44,9 @@ The clone carries `omarchy.clonedFrom = <id>`, so the shell:
 | `plugpatcher setup <id> [url]` | start editing: clone upstream into the repo, generate the clone, switch to it |
 | `plugpatcher sync <id>` | `git fetch` upstream, rebase your branch, regenerate the clone; aborts on conflict |
 | `plugpatcher pr <id>` | fork if needed, push your branch, open a PR against upstream |
-| `plugpatcher remove <id>` | restore the original, delete/backup the repo |
+| `plugpatcher revert <id>` | restore the original, delete/backup the repo |
+| `plugpatcher use <id> <side>` | switch the loaded plugin: `patched` or `original` (enable/disable only) |
+| `plugpatcher delete <id> <side>` | delete `original`, `patched`, or `both` |
 | `plugpatcher open <id>` | launch the configured harness, or the system default agent, in the repo |
 | `plugpatcher files <id>` | open the patch folder in the default file manager |
 | `plugpatcher editor <id>` | open the patch folder in the default editor |

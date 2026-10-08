@@ -44,6 +44,16 @@ plugpatcher pr <plugin-id>           # open a PR for your changes
 plugpatcher remove <plugin-id>       # stop editing; restore the original
 ```
 
+Each patched plugin in the panel also has a **switch** button (an arrow): it
+reads `→ Original` while the patched clone is loaded and `→ Patched` while the
+original is, and just flips which one is enabled. A **Delete** button opens a
+prompt to delete the **original**, the **patched** clone, or **both**.
+
+```bash
+plugpatcher use <plugin-id> patched|original   # switch without deleting
+plugpatcher delete <plugin-id> original|patched|both
+```
+
 ### Settings (the gear button)
 
 The panel's gear opens settings for how the **AI** button opens projects:

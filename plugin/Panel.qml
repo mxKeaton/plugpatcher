@@ -30,7 +30,7 @@ Panel {
   property var plugins: []
   property bool busy: false
   property string statusMessage: ""
-  property string pendingRevert: ""   // plugin id awaiting revert confirmation
+  property string pendingDelete: ""   // plugin id whose delete prompt is open
   property string sortBy: "name"       // name | edits | updates | id
   property string lastStdout: ""
   property string lastStderr: ""
@@ -684,29 +684,33 @@ Panel {
                       }
 
                       ActionButton {
-                        visible: modelData.state === "editing" && root.pendingRevert !== modelData.id
+                        visible: modelData.state === "editing" && root.pendingDelete !== modelData.id
                         text: "Send PR"
                         onClicked: root.runAction(["pr", modelData.id])
                       }
 
                       ActionButton {
-                        visible: (modelData.state === "editing" || modelData.state === "orphaned") && root.pendingRevert !== modelData.id
-                        text: modelData.state === "orphaned" ? "Delete" : "Revert"
+                        visible: modelData.state === "editing"
+                        text: modelData.cloneEnabled ? "\uf061  Original" : "\uf061  Patched"
+                        onClicked: root.runAction(["use", modelData.id, modelData.cloneEnabled ? "original" : "patched"])
+                      }
+
+                      ActionButton {
+                        visible: (modelData.state === "editing" || modelData.state === "orphaned") && root.pendingDelete !== modelData.id
+                        text: "Delete"
                         foreground: root.danger
-                        onClicked: root.pendingRevert = modelData.id
+                        onClicked: root.pendingDelete = modelData.id
                       }
                     }
 
-                    // revert confirmation
+                    // delete prompt
                     Row {
-                      visible: modelData.state === "editing" && root.pendingRevert === modelData.id
+                      visible: (modelData.state === "editing" || modelData.state === "orphaned") && root.pendingDelete === modelData.id
                       spacing: Style.space(6)
 
                       Text {
                         textFormat: Text.PlainText
-                        text: modelData.state === "orphaned"
-                              ? "Delete this orphaned patch (repo + clone)?"
-                              : "Revert all edits and restore the original?"
+                        text: "Delete:"
                         color: root.danger
                         font.family: root.ff
                         font.pixelSize: Style.font.bodySmall
@@ -714,18 +718,39 @@ Panel {
                       }
 
                       ActionButton {
-                        text: modelData.state === "orphaned" ? "Yes, delete" : "Yes, revert"
+                        visible: modelData.state !== "orphaned"
+                        text: "Original"
                         foreground: root.danger
                         onClicked: {
-                          var target = modelData.id
-                          root.pendingRevert = ""
-                          root.runAction(["revert", target])
+                          var t = modelData.id
+                          root.pendingDelete = ""
+                          root.runAction(["delete", t, "original"])
+                        }
+                      }
+
+                      ActionButton {
+                        text: "Patched"
+                        foreground: root.danger
+                        onClicked: {
+                          var t = modelData.id
+                          root.pendingDelete = ""
+                          root.runAction(["delete", t, "patched"])
+                        }
+                      }
+
+                      ActionButton {
+                        text: "Both"
+                        foreground: root.danger
+                        onClicked: {
+                          var t = modelData.id
+                          root.pendingDelete = ""
+                          root.runAction(["delete", t, "both"])
                         }
                       }
 
                       ActionButton {
                         text: "Cancel"
-                        onClicked: root.pendingRevert = ""
+                        onClicked: root.pendingDelete = ""
                       }
                     }
                   }
