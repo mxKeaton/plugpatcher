@@ -246,10 +246,25 @@ Panel {
   }
 
   component Badge: Rectangle {
+    id: badgeRoot
     property string label: ""
     property color textColor: root.muted
     property real factor: 1
-    implicitWidth: badgeText.implicitWidth + Style.space(12 * factor)
+    // When set, the pill is sized to this text instead of `label`, so different
+    // words render as the same-size badge.
+    property string widthRef: ""
+
+    readonly property int textPx: Math.max(8, Math.round(Style.font.caption * factor))
+
+    TextMetrics {
+      id: badgeMetrics
+      font.family: root.ff
+      font.pixelSize: badgeRoot.textPx
+      font.bold: true
+      text: badgeRoot.widthRef !== "" ? badgeRoot.widthRef : badgeRoot.label
+    }
+
+    implicitWidth: badgeMetrics.width + Style.space(12 * factor)
     implicitHeight: badgeText.implicitHeight + Style.space(4 * factor)
     radius: height / 2
     color: Util.alpha(root.fg, 0.06)
@@ -259,10 +274,10 @@ Panel {
       id: badgeText
       anchors.centerIn: parent
       textFormat: Text.PlainText
-      text: parent.label
-      color: parent.textColor
+      text: badgeRoot.label
+      color: badgeRoot.textColor
       font.family: root.ff
-      font.pixelSize: Math.max(8, Math.round(Style.font.caption * factor))
+      font.pixelSize: badgeRoot.textPx
       font.bold: true
     }
   }
@@ -645,6 +660,7 @@ Panel {
 
                         Badge {
                           anchors.horizontalCenter: parent.horizontalCenter
+                          widthRef: "original"
                           label: root.stateLabel(modelData)
                           textColor: root.stateColor(modelData)
                         }
@@ -663,6 +679,7 @@ Panel {
                           visible: modelData.state === "editing"
                           anchors.horizontalCenter: parent.horizontalCenter
                           factor: 2 / 3
+                          widthRef: "original"
                           label: modelData.cloneEnabled ? "original" : "patched"
                           textColor: root.badgeColorFor(modelData.cloneEnabled ? "original" : "patched")
 
