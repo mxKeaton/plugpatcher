@@ -524,14 +524,28 @@ cmd_open_files() {
   [[ -n "$id" ]] || die "usage: plugpatcher files <plugin-id>"
   is_setup "$id" || die "'$id' is not set up for editing (run: plugpatcher setup $id)"
   local repo; repo="$(require_repo "$id")"
-  if command -v xdg-open >/dev/null 2>&1; then
-    log "opening patch folder: $repo"
-    setsid uwsm-app -- xdg-open "$repo" >/dev/null 2>&1 &
+
+  # Prefer the Omarchy file manager (flea) when present; xdg-open would follow
+  # the XDG default, which is usually Nautilus regardless of `flea --default`.
+  local -a launch=()
+  if [[ -n "${PLUGPATCHER_FILE_MANAGER:-}" ]]; then
+    # shellcheck disable=SC2206
+    launch=(${PLUGPATCHER_FILE_MANAGER})
+  elif command -v flea >/dev/null 2>&1; then
+    launch=(flea --gui)
+  elif command -v xdg-open >/dev/null 2>&1; then
+    launch=(xdg-open)
   elif command -v nautilus >/dev/null 2>&1; then
-    log "opening patch folder: $repo"
-    setsid uwsm-app -- nautilus "$repo" >/dev/null 2>&1 &
+    launch=(nautilus)
   else
-    die "no file manager found (install xdg-utils or a file manager)"
+    die "no file manager found (install flea or a file manager)"
+  fi
+
+  log "opening patch folder with ${launch[0]}: $repo"
+  if command -v uwsm-app >/dev/null 2>&1; then
+    setsid uwsm-app -- "${launch[@]}" "$repo" >/dev/null 2>&1 &
+  else
+    setsid "${launch[@]}" "$repo" >/dev/null 2>&1 &
   fi
 }
 

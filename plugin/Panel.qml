@@ -144,9 +144,10 @@ Panel {
         var out = String(root.lastStdout || "").trim()
         var err = String(root.lastStderr || "").trim()
         if (code === 0) {
+          // Success needs no message; only surface issues.
           root.feedbackError = false
-          root.feedback = out !== "" ? out : "done"
-          root.statusMessage = "done"
+          root.feedback = ""
+          root.statusMessage = ""
         } else {
           root.feedbackError = true
           var lines = err.split("\n").filter(function(l) { return l.trim() !== "" })
