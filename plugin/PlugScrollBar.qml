@@ -1,0 +1,76 @@
+import QtQuick
+import qs.Commons
+
+// A draggable vertical scrollbar for a Flickable whose content is taller than
+// its viewport. Drag the handle, or click the track to jump.
+Item {
+  id: root
+
+  required property var flickable
+  property color foreground: Color.foreground
+  property real minHandleHeight: 28
+
+  readonly property real trackHeight: height
+  readonly property bool scrollable: flickable && flickable.contentHeight > flickable.height + 1
+  readonly property real maxScroll: scrollable ? (flickable.contentHeight - flickable.height) : 0
+  readonly property real handleHeight: scrollable
+    ? Math.max(minHandleHeight, Math.min(trackHeight, trackHeight * (flickable.height / flickable.contentHeight)))
+    : 0
+  readonly property real handleY: {
+    if (!scrollable) return 0
+    var t = trackHeight - handleHeight
+    if (t <= 0 || maxScroll <= 0) return 0
+    return (flickable.contentY / maxScroll) * t
+  }
+
+  visible: scrollable
+  implicitWidth: Style.space(12)
+
+  Rectangle {
+    anchors.fill: parent
+    anchors.leftMargin: Style.space(3)
+    radius: width / 2
+    color: Util.alpha(root.foreground, 0.08)
+  }
+
+  Rectangle {
+    id: handle
+    x: Style.space(3)
+    y: root.handleY
+    width: root.width - Style.space(6)
+    height: root.handleHeight
+    radius: width / 2
+    color: Util.alpha(root.foreground, dragArea.pressed ? 0.55 : 0.32)
+  }
+
+  MouseArea {
+    id: dragArea
+    anchors.fill: parent
+    preventStealing: true
+    property real grabOffset: 0
+
+    function scrollToViewportY(vy) {
+      var t = root.trackHeight - root.handleHeight
+      if (t <= 0) return
+      var hy = Math.max(0, Math.min(t, vy - dragArea.grabOffset))
+      root.flickable.contentY = Math.max(0, Math.min(root.maxScroll, (hy / t) * root.maxScroll))
+    }
+
+    onPressed: function(mouse) {
+      var vy = dragArea.mapToItem(root.flickable, mouse.x, mouse.y).y
+      var handleViewportY = root.flickable.contentY + root.handleY
+      if (vy >= handleViewportY && vy <= handleViewportY + root.handleHeight) {
+        dragArea.grabOffset = vy - handleViewportY
+      } else {
+        dragArea.grabOffset = root.handleHeight / 2
+        dragArea.scrollToViewportY(vy)
+      }
+    }
+
+    onPositionChanged: function(mouse) {
+      if (!pressed) return
+      var vy = dragArea.mapToItem(root.flickable, mouse.x, mouse.y).y
+      dragArea.scrollToViewportY(vy)
+    }
+  }
+}

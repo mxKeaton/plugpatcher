@@ -480,51 +480,77 @@ Panel {
             }
           }
 
-          Flickable {
+          Item {
             width: parent.width
             height: Math.min(pickColumn.implicitHeight, Style.space(430))
-            contentWidth: width
-            contentHeight: pickColumn.implicitHeight
-            clip: true
-            boundsBehavior: Flickable.StopAtBounds
 
-            Column {
-              id: pickColumn
-              width: parent.width
-              spacing: Style.space(4)
+            Flickable {
+              id: pickFlick
+              anchors.left: parent.left
+              anchors.top: parent.top
+              anchors.bottom: parent.bottom
+              width: parent.width - pickBar.width - Style.space(6)
+              contentWidth: width
+              contentHeight: pickColumn.implicitHeight
+              clip: true
+              boundsBehavior: Flickable.StopAtBounds
 
-              Repeater {
-                model: root.settings.harnesses || []
+              Column {
+                id: pickColumn
+                width: parent.width
+                spacing: Style.space(4)
 
-                Button {
-                  required property var modelData
-                  width: pickColumn.width
-                  leftAlign: true
-                  text: modelData.label
-                  selected: String(modelData.value) === String(root.settings.harness)
-                  foreground: root.fg
-                  fontFamily: root.ff
-                  fontSize: Style.font.body
-                  bordered: true
-                  enabled: !root.busy
-                  horizontalPadding: Style.space(10)
-                  verticalPadding: Style.space(5)
-                  onClicked: {
-                    var target = root.picking
-                    root.setConfig(target, modelData.value)
-                    root.picking = ""
+                Repeater {
+                  model: root.settings.harnesses || []
+
+                  Button {
+                    required property var modelData
+                    width: pickColumn.width
+                    leftAlign: true
+                    text: modelData.label
+                    selected: String(modelData.value) === String(root.settings.harness)
+                    foreground: root.fg
+                    fontFamily: root.ff
+                    fontSize: Style.font.body
+                    bordered: true
+                    enabled: !root.busy
+                    horizontalPadding: Style.space(10)
+                    verticalPadding: Style.space(5)
+                    onClicked: {
+                      var target = root.picking
+                      root.setConfig(target, modelData.value)
+                      root.picking = ""
+                    }
                   }
                 }
               }
+            }
+
+            PlugScrollBar {
+              id: pickBar
+              z: 5
+              anchors.right: parent.right
+              anchors.top: parent.top
+              anchors.bottom: parent.bottom
+              flickable: pickFlick
+              foreground: root.fg
             }
           }
         }
 
         // ---------------------------------------------------------- list
-        Flickable {
+        Item {
+          id: listArea
           visible: !root.settingsOpen
           width: parent.width
           height: Math.min(pluginColumn.implicitHeight, Style.space(470))
+
+        Flickable {
+          id: listFlick
+          anchors.left: parent.left
+          anchors.top: parent.top
+          anchors.bottom: parent.bottom
+          width: parent.width - listBar.width - Style.space(6)
           contentWidth: width
           contentHeight: pluginColumn.implicitHeight
           clip: true
@@ -695,6 +721,18 @@ Panel {
                 }
               }
             }
+          }
+
+        }
+
+          PlugScrollBar {
+            id: listBar
+            z: 5
+            anchors.right: parent.right
+            anchors.top: parent.top
+            anchors.bottom: parent.bottom
+            flickable: listFlick
+            foreground: root.fg
           }
         }
       }
