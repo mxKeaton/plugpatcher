@@ -452,7 +452,7 @@ cmd_pr() {
   diff="$(git -C "$repo" diff "origin/$ub...$branch" 2>/dev/null | head -c 20000 || true)"
   if ai_text_for_diff "$diff"; then
     pr_title="$PR_TITLE"; pr_body="$PR_BODY"
-    log "wrote the PR title and description with '$agent'"
+    log "wrote the PR title and description with the default agent"
   else
     warn "no default agent output; using a generic PR description"
     pr_title="$(git -C "$repo" log -1 --format=%s "$branch" 2>/dev/null || true)"
