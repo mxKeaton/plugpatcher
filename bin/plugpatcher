@@ -524,29 +524,9 @@ cmd_open_files() {
   [[ -n "$id" ]] || die "usage: plugpatcher files <plugin-id>"
   is_setup "$id" || die "'$id' is not set up for editing (run: plugpatcher setup $id)"
   local repo; repo="$(require_repo "$id")"
-
-  # Prefer the Omarchy file manager (flea) when present; xdg-open would follow
-  # the XDG default, which is usually Nautilus regardless of `flea --default`.
-  local -a launch=()
-  if [[ -n "${PLUGPATCHER_FILE_MANAGER:-}" ]]; then
-    # shellcheck disable=SC2206
-    launch=(${PLUGPATCHER_FILE_MANAGER})
-  elif command -v flea >/dev/null 2>&1; then
-    launch=(flea --gui)
-  elif command -v xdg-open >/dev/null 2>&1; then
-    launch=(xdg-open)
-  elif command -v nautilus >/dev/null 2>&1; then
-    launch=(nautilus)
-  else
-    die "no file manager found (install flea or a file manager)"
-  fi
-
-  log "opening patch folder with ${launch[0]}: $repo"
-  if command -v uwsm-app >/dev/null 2>&1; then
-    setsid uwsm-app -- "${launch[@]}" "$repo" >/dev/null 2>&1 &
-  else
-    setsid "${launch[@]}" "$repo" >/dev/null 2>&1 &
-  fi
+  command -v xdg-open >/dev/null 2>&1 || die "xdg-open is not installed (install xdg-utils)"
+  log "opening patch folder: $repo"
+  setsid xdg-open "$repo" >/dev/null 2>&1 &
 }
 
 # Open the per-project patch folder in the default editor.
