@@ -142,6 +142,12 @@ Panel {
     return root.muted
   }
 
+  // Colour by label, not by slot: 'patched' is always accent, 'original' always
+  // muted.
+  function badgeColorFor(label) {
+    return label === "patched" ? Color.accent : root.muted
+  }
+
   function labelFor(options, value) {
     var list = options || []
     for (var i = 0; i < list.length; i++)
@@ -637,7 +643,9 @@ Panel {
                         spacing: Style.space(2)
 
                         Badge {
+                          id: curBadge
                           anchors.horizontalCenter: parent.horizontalCenter
+                          width: Math.max(curBadge.implicitWidth, otherBadge.implicitWidth)
                           label: root.stateLabel(modelData)
                           textColor: root.stateColor(modelData)
                         }
@@ -652,10 +660,12 @@ Panel {
                         }
 
                         Badge {
+                          id: otherBadge
                           visible: modelData.state === "editing"
                           anchors.horizontalCenter: parent.horizontalCenter
+                          width: Math.max(curBadge.implicitWidth, otherBadge.implicitWidth)
                           label: modelData.cloneEnabled ? "original" : "patched"
-                          textColor: root.muted
+                          textColor: root.badgeColorFor(modelData.cloneEnabled ? "original" : "patched")
 
                           MouseArea {
                             anchors.fill: parent
