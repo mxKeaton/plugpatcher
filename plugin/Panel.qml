@@ -285,10 +285,10 @@ Panel {
 
           Repeater {
             model: [
-              { key: "edits", label: "Edited" },
               { key: "name", label: "Name" },
-              { key: "updates", label: "Updated" },
-              { key: "id", label: "ID" }
+              { key: "id", label: "ID" },
+              { key: "edits", label: "Edited" },
+              { key: "updates", label: "Updated" }
             ]
 
             ActionButton {
