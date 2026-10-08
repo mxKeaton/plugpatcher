@@ -36,6 +36,8 @@ Panel {
   property string lastStderr: ""
   property string feedback: ""        // result shown in the feedback box
   property bool feedbackError: false
+  property string progress: ""        // text shown while an action runs
+  property string lastAction: ""      // verb of the running/last action
   property bool cliAvailable: true
   property bool settingsOpen: false
   property string picking: ""          // "" | "harness" | "model"
@@ -97,6 +99,20 @@ Panel {
     }
   }
 
+  function progressFor(args) {
+    var a = String(args[0] || "")
+    if (a === "setup") return "Setting up editing…"
+    if (a === "sync") return "Updating from origin…"
+    if (a === "pr") return "Pushing and writing the PR description… (this can take a moment)"
+    if (a === "revert") return "Reverting to the original…"
+    if (a === "delete") return "Deleting…"
+    if (a === "use" || a === "switch") return "Switching install…"
+    if (a === "open") return "Opening…"
+    if (a === "editor") return "Opening the editor…"
+    if (a === "files") return "Opening the folder…"
+    return "Working…"
+  }
+
   function runAction(args) {
     if (busy) return
     if (!cliAvailable) {
@@ -106,11 +122,13 @@ Panel {
     }
     pendingConfigChange = false
     busy = true
+    lastAction = String(args[0] || "")
+    progress = progressFor(args)
     feedback = ""
     feedbackError = false
     lastStdout = ""
     lastStderr = ""
-    statusMessage = args.join(" ") + " …"
+    statusMessage = progress
     actionProc.command = [cli].concat(args)
     actionProc.running = true
   }
@@ -214,15 +232,17 @@ Panel {
         var out = String(root.lastStdout || "").trim()
         var err = String(root.lastStderr || "").trim()
         if (code === 0) {
-          // Success needs no message; only surface issues.
+          // Surface stdout when there is something worth showing (e.g. a PR URL).
           root.feedbackError = false
-          root.feedback = ""
+          root.feedback = out
+          root.progress = ""
           root.statusMessage = ""
         } else {
           root.feedbackError = true
           var lines = err.split("\n").filter(function(l) { return l.trim() !== "" })
           var msg = lines.length > 0 ? lines[lines.length - 1] : ("failed (exit " + code + ")")
           root.feedback = String(msg).replace(/^plugpatcher:\s*(error:\s*)?/, "")
+          root.progress = ""
           root.statusMessage = "failed"
         }
         if (root.pendingConfigChange) {
@@ -416,7 +436,7 @@ Panel {
         // ---------------------------------------------------------- feedback
         Rectangle {
           id: feedbackBox
-          visible: !root.settingsOpen && root.feedback !== ""
+          visible: !root.settingsOpen && (root.busy ? root.progress !== "" : root.feedback !== "")
           width: parent.width
           implicitHeight: feedbackColumn.implicitHeight + Style.space(16)
           radius: Style.cornerRadius
@@ -435,7 +455,9 @@ Panel {
 
             Text {
               textFormat: Text.PlainText
-              text: (root.feedbackError ? "\uf071  " : "\uf00c  ") + root.feedback
+              text: root.busy
+                    ? "\uf110  " + root.progress
+                    : ((root.feedbackError ? "\uf071  " : "\uf00c  ") + root.feedback)
               color: root.feedbackError ? root.danger : root.fg
               font.family: root.ff
               font.pixelSize: Style.font.bodySmall
@@ -444,6 +466,7 @@ Panel {
             }
 
             ActionButton {
+              visible: !root.busy
               text: "Dismiss"
               onClicked: root.feedback = ""
             }
