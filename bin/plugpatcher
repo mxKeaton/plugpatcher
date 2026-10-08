@@ -1,0 +1,568 @@
+#!/usr/bin/env bash
+#
+# plugpatcher — edit Omarchy shell plugins while keeping the original pristine
+# and updatable.
+#
+#   original plugin   ~/.config/omarchy/plugins/<id>          (untouched, omarchy-updatable)
+#   per-project repo  ~/.local/share/plugpatcher/<id>/        (git clone of upstream + your branches)
+#   generated clone   ~/.config/omarchy/plugins/local.<seg>/  (what the shell loads)
+#
+# The clone carries `omarchy.clonedFrom = <id>`, so the shell routes the
+# original's IPC/service calls to the clone and switches the bar/layout to it —
+# the same convention `omarchy plugin clone` uses, which it only offers for
+# first-party plugins. PlugPatcher does it for any plugin.
+#
+# Commands:
+#   list                 installed plugins and their edit state
+#   status <id>          details for one plugin
+#   setup <id> [url]     start editing (clone upstream into a per-project repo)
+#   sync <id>            pull upstream into the repo (rebase) and regenerate the clone
+#   pr <id>              push your branch to a fork and open a pull request
+#   remove <id>          stop editing: restore the original, delete the repo
+#   open <id>            launch the system default agent in the repo, resuming its session
+#   help                 this text
+
+set -euo pipefail
+
+VERSION="0.1.0"
+
+OMARCHY_PATH="${OMARCHY_PATH:-/usr/share/omarchy}"
+PLUGINS_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/omarchy/plugins"
+DATA_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/plugpatcher"
+STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/plugpatcher"
+AGENT_FILE="$HOME/.config/omarchy/defaults/agent"
+CATALOG="$DATA_DIR/catalog.json"
+
+# Extra `git -c` args used when the user has no identity configured, so internal
+# rebases/commits never fail on a machine where Omarchy's git setup was skipped.
+GIT_ID=()
+git_identity() {
+  if git config user.email >/dev/null 2>&1 && git config user.name >/dev/null 2>&1; then
+    GIT_ID=()
+  else
+    GIT_ID=(-c user.name="${GIT_AUTHOR_NAME:-PlugPatcher}" -c user.email="${GIT_AUTHOR_EMAIL:-plugpatcher@localhost}")
+  fi
+}
+
+# --------------------------------------------------------------------- output
+
+log()  { printf 'plugpatcher: %s\n' "$*" >&2; }
+warn() { printf 'plugpatcher: warning: %s\n' "$*" >&2; }
+die()  { printf 'plugpatcher: error: %s\n' "$*" >&2; exit 1; }
+
+notify() { # summary body
+  command -v omarchy-notification-send >/dev/null 2>&1 || return 0
+  omarchy-notification-send -g "PlugPatcher" "$1" "${2:-}" >/dev/null 2>&1 || true
+}
+
+need() { command -v "$1" >/dev/null 2>&1 || die "missing dependency: $1"; }
+
+# ---------------------------------------------------------------------- paths
+
+plugin_dir() { printf '%s/%s' "$PLUGINS_DIR" "$1"; }
+repo_dir()   { printf '%s/%s' "$DATA_DIR" "$1"; }
+meta_file()  { printf '%s/%s.json' "$DATA_DIR" "$1"; }
+log_file()   { printf '%s/%s.log' "$STATE_DIR" "$1"; }
+
+is_setup() { [[ -f "$(meta_file "$1")" ]]; }
+
+edit_id_of() { # read from metadata
+  jq -r '.editId' "$(meta_file "$1")"
+}
+
+manifest_path() { # id -> path to manifest.json (user plugin first, then catalog)
+  local id="$1" d
+  d="$(plugin_dir "$id")"
+  if [[ -f "$d/manifest.json" ]]; then
+    printf '%s' "$d/manifest.json"
+    return 0
+  fi
+  omarchy-plugin-catalog 2>/dev/null |
+    jq -r --arg id "$id" '.[] | select(.id == $id) | .manifestPath' | head -1
+}
+
+# Last dotted segment, sanitized to a legal plugin id fragment.
+edit_id_for() {
+  local source_id="$1" seg
+  seg="${source_id##*.}"
+  seg="${seg//[^A-Za-z0-9._-]/}"
+  [[ -n "$seg" ]] || seg="$source_id"
+  local candidate="local.$seg"
+  # Collision with a different plugin already owning that clone id.
+  if [[ -d "$(plugin_dir "$candidate")" ]] && \
+     { [[ ! -f "$(meta_file "$candidate")" ]] || [[ "$(jq -r '.sourceId' "$(meta_file "$candidate")" 2>/dev/null)" != "$source_id" ]]; }; then
+    candidate="local.$seg-$(printf '%s' "$source_id" | md5sum | cut -c1-4)"
+  fi
+  printf '%s' "$candidate"
+}
+
+upstream_url_of() {
+  local d; d="$(plugin_dir "$1")"
+  [[ -d "$d/.git" ]] || return 1
+  git -C "$d" remote get-url origin 2>/dev/null
+}
+
+repo_default_branch() { # repo -> upstream branch name
+  local repo="$1"
+  git -C "$repo" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null | sed 's#^origin/##' && return 0
+  if git -C "$repo" show-ref --verify --quiet refs/remotes/origin/main; then echo main; return 0; fi
+  if git -C "$repo" show-ref --verify --quiet refs/remotes/origin/master; then echo master; return 0; fi
+  echo master
+}
+
+rescan() { omarchy-shell -q shell rescanPlugins >/dev/null 2>&1 || true; }
+
+wait_discovered() { # id
+  local id="$1" i
+  for (( i = 0; i < 60; i++ )); do
+    if omarchy-plugin-list --json 2>/dev/null | jq -e --arg id "$id" 'any(.[]; .id == $id)' >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 0.05
+  done
+  return 1
+}
+
+# ------------------------------------------------------------- clone generation
+
+# Build ~/.config/omarchy/plugins/<editId> from the repo's branch, rewriting the
+# manifest so the clone coexists with the original and routes back to it.
+generate_clone() {
+  local id="$1"
+  local mf repo branch edit_id source_id name display
+  mf="$(meta_file "$id")"
+  repo="$(repo_dir "$id")"
+  branch="$(jq -r '.branch' "$mf")"
+  edit_id="$(jq -r '.editId' "$mf")"
+  source_id="$(jq -r '.sourceId' "$mf")"
+  name="$(jq -r '.name // empty' "$mf")"
+  [[ -n "$name" ]] || name="$source_id"
+  display="My $name"
+
+  [[ -d "$repo/.git" ]] || die "no repository at $repo"
+  git -C "$repo" rev-parse --verify --quiet "$branch" >/dev/null || die "branch '$branch' is missing in $repo"
+
+  local tmp; tmp="$(mktemp -d "$DATA_DIR/.gen.XXXXXX")"
+  trap 'rm -rf "$tmp"' RETURN
+
+  git -C "$repo" archive "$branch" | tar -x -C "$tmp"
+  [[ -f "$tmp/manifest.json" ]] || die "branch '$branch' has no manifest.json"
+
+  jq --arg id "$edit_id" --arg name "$display" --arg src "$source_id" '
+    .id = $id
+    | .name = $name
+    | (if (.barWidget | type) == "object" then .barWidget.displayName = $name else . end)
+    | .omarchy = ((if (.omarchy | type) == "object" then .omarchy else {} end) + {clonedFrom: $src})
+    | del(.omarchy.clonePaths)
+    | .plugpatcher = {generated: true, sourceId: $src}
+  ' "$tmp/manifest.json" > "$tmp/manifest.json.tmp"
+  mv "$tmp/manifest.json.tmp" "$tmp/manifest.json"
+
+  # No symlinks may survive into the plugin tree (omarchy-plugin-validate).
+  local link; link="$(find "$tmp" -type l -print -quit 2>/dev/null || true)"
+  if [[ -n "$link" ]]; then
+    warn "upstream contains a symlink ($link); dereferencing copies"
+    # Replace symlinks with their targets where possible.
+    while IFS= read -r -d '' l; do
+      if [[ -e "$l" ]]; then
+        local c; c="$(readlink -f "$l")"
+        rm -f "$l"; cp -a "$c" "$l"
+      else
+        rm -f "$l"
+      fi
+    done < <(find "$tmp" -type l -print0)
+  fi
+
+  local target; target="$(plugin_dir "$edit_id")"
+  local old="${target}.plugpatcher-old.$$"
+  rm -rf "$old"
+  [[ -e "$target" ]] && mv "$target" "$old"
+  mv "$tmp" "$target"
+  rm -rf "$old"
+  trap - RETURN
+  log "generated $edit_id"
+}
+
+# ------------------------------------------------------------------- setup flow
+
+cmd_setup() {
+  local id="${1:-}" upstream="${2:-}"
+  [[ -n "$id" ]] || die "usage: plugpatcher setup <plugin-id> [upstream-git-url]"
+  local pd; pd="$(plugin_dir "$id")"
+  [[ -f "$pd/manifest.json" ]] || die "'$id' is not installed at $pd"
+  is_setup "$id" && die "'$id' is already set up for editing (editId: $(edit_id_of "$id"))"
+  need git; need jq
+
+  local first_party=false
+  [[ "$id" == omarchy.* ]] && first_party=true
+
+  if [[ -z "$upstream" ]]; then
+    upstream="$(upstream_url_of "$id" || true)"
+  fi
+  if [[ "$first_party" == false && -z "$upstream" ]]; then
+    die "'$id' has no git origin; re-run: plugpatcher setup '$id' <upstream-git-url>"
+  fi
+
+  local name kinds edit_id repo
+  name="$(jq -r '.name // .id' "$pd/manifest.json")"
+  kinds="$(jq -r '(.kinds // []) | join(",")' "$pd/manifest.json")"
+  edit_id="$(edit_id_for "$id")"
+  repo="$(repo_dir "$id")"
+
+  mkdir -p "$DATA_DIR" "$STATE_DIR"
+
+  local upstream_branch=""
+  if [[ "$first_party" == true && -z "$upstream" ]]; then
+    local stock
+    stock="$(omarchy-plugin-catalog | jq -r --arg id "$id" '.[] | select(.id==$id) | .sourceDir' | head -1)"
+    [[ -d "$stock" ]] || die "cannot locate the stock source for '$id'"
+    rm -rf "$repo"; mkdir -p "$repo"
+    cp -a "$stock/." "$repo/"; rm -rf "$repo/.git"
+    git -C "$repo" init -q
+    git -C "$repo" add -A
+    git -C "$repo" -c user.name=plugpatcher -c user.email=plugpatcher@localhost \
+      commit -qm "PlugPatcher: stock snapshot of $id"
+    upstream="(stock)"
+    upstream_branch="(none)"
+  else
+    if [[ -d "$repo/.git" ]]; then
+      git -C "$repo" fetch -q origin
+    else
+      git clone -q -- "$upstream" "$repo"
+    fi
+    upstream_branch="$(repo_default_branch "$repo")"
+  fi
+
+  local branch="local"
+  if git -C "$repo" show-ref --verify --quiet "refs/heads/$branch"; then
+    git -C "$repo" checkout -q "$branch"
+  elif [[ -n "$upstream_branch" && "$upstream_branch" != "(none)" ]]; then
+    git -C "$repo" checkout -q -B "$branch" "origin/$upstream_branch"
+  else
+    git -C "$repo" checkout -q -B "$branch"
+  fi
+
+  # Capture whatever the live plugin dir currently holds as the first change.
+  if command -v rsync >/dev/null 2>&1; then
+    rsync -a --delete --exclude '.git' "$pd/" "$repo/"
+  else
+    while IFS= read -r -d '' f; do
+      rel="${f#"$pd"/}"
+      [[ "$rel" == .git/* || "$rel" == .git ]] && continue
+      mkdir -p "$repo/$(dirname "$rel")"
+      cp -a "$f" "$repo/$rel"
+    done < <(find "$pd" -mindepth 1 -print0)
+  fi
+  git -C "$repo" add -A
+  if ! git -C "$repo" diff --cached --quiet; then
+    git -C "$repo" -c user.name="${GIT_AUTHOR_NAME:-PlugPatcher}" \
+      -c user.email="${GIT_AUTHOR_EMAIL:-plugpatcher@localhost}" \
+      commit -qm "PlugPatcher: capture current edits"
+    log "captured the current state of '$id' as the first change"
+  fi
+
+  jq -n \
+    --arg sourceId "$id" \
+    --arg editId "$edit_id" \
+    --arg name "$name" \
+    --arg upstream "$upstream" \
+    --arg upstreamBranch "$upstream_branch" \
+    --arg branch "$branch" \
+    --argjson firstParty "$first_party" \
+    --arg createdAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    '{version:1, sourceId:$sourceId, editId:$editId, name:$name, upstream:$upstream,
+      upstreamBranch:$upstreamBranch, branch:$branch, firstParty:$firstParty,
+      createdAt:$createdAt}' > "$(meta_file "$id")"
+
+  generate_clone "$id"
+  rescan
+
+  if [[ ",$kinds," == *",bar,"* ]]; then
+    omarchy bar use "$edit_id" >/dev/null
+    omarchy plugin disable "$id" >/dev/null 2>&1 || true
+  else
+    if ! wait_discovered "$edit_id"; then
+      die "clone '$edit_id' was not discovered by the shell"
+    fi
+    omarchy plugin enable "$edit_id" >/dev/null
+  fi
+
+  write_catalog >/dev/null 2>&1 || true
+  notify "PlugPatcher: editing $name" "Active as $edit_id"
+  log "editing '$id' → clone '$edit_id'"
+  log "repo: $repo"
+}
+
+# -------------------------------------------------------------------- sync flow
+
+cmd_sync() {
+  local id="${1:-}"
+  [[ -n "$id" ]] || die "usage: plugpatcher sync <plugin-id>"
+  is_setup "$id" || die "'$id' is not set up (run: plugpatcher setup $id)"
+  need git; need jq
+
+  local mf repo branch ub upstream first_party
+  mf="$(meta_file "$id")"
+  repo="$(repo_dir "$id")"
+  branch="$(jq -r '.branch' "$mf")"
+  ub="$(jq -r '.upstreamBranch' "$mf")"
+  upstream="$(jq -r '.upstream' "$mf")"
+  first_party="$(jq -r '.firstParty' "$mf")"
+
+  git -C "$repo" checkout -q "$branch"
+
+  if [[ "$first_party" == "true" || "$upstream" == "(stock)" ]]; then
+    warn "'$id' is first-party; re-seed from stock with 'plugpatcher remove' then 'setup'"
+    return 0
+  fi
+
+  git -C "$repo" fetch -q origin
+  if ! git -C "$repo" "${GIT_ID[@]}" rebase "origin/$ub" >/dev/null 2>&1; then
+    git -C "$repo" rebase --abort >/dev/null 2>&1 || true
+    notify "PlugPatcher: conflict syncing $id" "Nothing changed. Resolve in $repo"
+    die "cannot auto-merge upstream for '$id'; resolve manually in $repo"
+  fi
+
+  generate_clone "$id"
+  rescan
+  write_catalog >/dev/null 2>&1 || true
+  notify "PlugPatcher: synced $id" "Rebased on origin/$ub"
+  log "synced '$id'"
+}
+
+# ---------------------------------------------------------------------- remove
+
+cmd_remove() {
+  local id="${1:-}" keep_repo="${2:-}"
+  [[ -n "$id" ]] || die "usage: plugpatcher remove <plugin-id>"
+  is_setup "$id" || die "'$id' is not set up"
+  local mf edit_id kinds
+  mf="$(meta_file "$id")"
+  edit_id="$(jq -r '.editId' "$mf")"
+  kinds="$(jq -r '(.kinds // []) | join(",")' "$(manifest_path "$id")" 2>/dev/null || true)"
+
+  if [[ ",$kinds," == *",bar,"* ]]; then
+    omarchy bar use "$id" >/dev/null 2>&1 || true
+    omarchy plugin enable "$id" >/dev/null 2>&1 || true
+  else
+    omarchy plugin enable "$id" >/dev/null 2>&1 || true
+  fi
+  omarchy plugin disable "$edit_id" >/dev/null 2>&1 || true
+
+  rm -rf "$(plugin_dir "$edit_id")"
+  rm -f "$mf"
+  if [[ "$keep_repo" == "--keep-repo" ]]; then
+    log "kept repository at $(repo_dir "$id")"
+  else
+    local backup="$STATE_DIR/removed/$id-$(date -u +%Y%m%d%H%M%S)"
+    mkdir -p "$(dirname "$backup")"
+    [[ -d "$(repo_dir "$id")" ]] && mv "$(repo_dir "$id")" "$backup" && log "repository backed up to $backup"
+  fi
+  rescan
+  write_catalog >/dev/null 2>&1 || true
+  notify "PlugPatcher: removed $id" "Original plugin restored"
+  log "removed '$id'; original is active again"
+}
+
+# -------------------------------------------------------------------------- pr
+
+github_slug() { # url -> owner/repo
+  local url="$1"
+  url="${url%.git}"
+  case "$url" in
+    git@github.com:*) url="${url#git@github.com:}" ;;
+    https://github.com/*) url="${url#https://github.com/}" ;;
+    http://github.com/*) url="${url#http://github.com/}" ;;
+    *) return 1 ;;
+  esac
+  printf '%s' "$url"
+}
+
+cmd_pr() {
+  local id="${1:-}"
+  [[ -n "$id" ]] || die "usage: plugpatcher pr <plugin-id>"
+  is_setup "$id" || die "'$id' is not set up"
+  need git; need jq
+  local mf repo branch ub upstream slug
+  mf="$(meta_file "$id")"
+  repo="$(repo_dir "$id")"
+  branch="$(jq -r '.branch' "$mf")"
+  ub="$(jq -r '.upstreamBranch' "$mf")"
+  upstream="$(jq -r '.upstream' "$mf")"
+
+  slug="$(github_slug "$upstream")" || die "'$id' upstream is not GitHub; push manually from $repo"
+
+  if ! command -v gh >/dev/null 2>&1 || ! gh auth status >/dev/null 2>&1; then
+    die "gh is not authenticated; run: gh auth login"
+  fi
+
+  local me; me="$(gh api user -q .login)"
+  local remote_branch="plugpatcher/$id"
+  local fork_url="https://github.com/$me/${slug#*/}.git"
+
+  git -C "$repo" remote remove plugpatcher-fork >/dev/null 2>&1 || true
+  git -C "$repo" remote add plugpatcher-fork "$fork_url"
+  gh repo fork "$slug" --clone=false >/dev/null 2>&1 || true
+  git -C "$repo" push -q -u plugpatcher-fork "$branch:$remote_branch"
+
+  local body
+  body="$(printf 'Changes made with [PlugPatcher](https://github.com/%s/PlugPatcher).\n\n%s\n' "$me" "")"
+  gh pr create --repo "$slug" --base "$ub" --head "$me:$remote_branch" \
+    --title "PlugPatcher changes for $id" --body "$body"
+}
+
+# ------------------------------------------------------------------------ open
+
+cmd_open() {
+  local id="${1:-}"
+  [[ -n "$id" ]] || die "usage: plugpatcher open <plugin-id>"
+  is_setup "$id" || die "'$id' is not set up"
+  local repo; repo="$(repo_dir "$id")"
+
+  local agent; agent="$(omarchy-default-agent 2>/dev/null || true)"
+  if [[ -z "$agent" ]]; then
+    die "no default agent set; choose one with: omarchy default agent <name>"
+  fi
+  command -v "$agent" >/dev/null 2>&1 || die "default agent '$agent' is not installed"
+
+  local -a cmd
+  case "$agent" in
+    pi)        cmd=(pi --continue) ;;
+    claude)    cmd=(claude --permission-mode auto --continue) ;;
+    opencode)  cmd=(opencode --auto --continue) ;;
+    codex)     cmd=(codex --approve-for-me resume --last) ;;
+    gemini)    cmd=(gemini --yolo --resume) ;;
+    crush)     cmd=(crush --yolo) ;;
+    omp)       cmd=(omp --auto-approve) ;;
+    *)         warn "no known resume flag for '$agent'; launching without resume"; cmd=("$agent") ;;
+  esac
+
+  log "opening $agent in $repo"
+  cd "$repo"
+  exec omarchy-launch-tui --app-id=org.omarchy.agent "${cmd[@]}"
+}
+
+# ------------------------------------------------------------------ list/status
+
+enabled_map() {
+  omarchy-shell -q shell listPlugins 2>/dev/null |
+    jq -r '.[] | "\(.id)\t\(.enabled)\t\(.active)"' 2>/dev/null || true
+}
+
+write_catalog() {
+  mkdir -p "$DATA_DIR"
+  local enabled; enabled="$(enabled_map)"
+  local entries="[]"
+  if command -v omarchy-plugin-catalog >/dev/null 2>&1; then
+    local line id name kinds manifest_path generated mf state edit_id upstream branch
+    while IFS= read -r line; do
+      [[ -n "$line" ]] || continue
+      id="$(jq -r '.id' <<<"$line")"
+      [[ "$id" == omarchy.* ]] && continue
+      manifest_path="$(jq -r '.manifestPath // empty' <<<"$line")"
+      generated="false"
+      [[ -n "$manifest_path" && -f "$manifest_path" ]] && \
+        generated="$(jq -r '.plugpatcher.generated // false' "$manifest_path" 2>/dev/null || echo false)"
+      # A PlugPatcher-generated clone is an artifact, not a target itself.
+      [[ "$generated" == "true" ]] && continue
+      name="$(jq -r '.name // .id' <<<"$line")"
+      kinds="$(jq -c '.kinds // []' <<<"$line")"
+      mf="$(meta_file "$id")"
+      if [[ -f "$mf" ]]; then
+        state="editing"
+        edit_id="$(jq -r '.editId' "$mf")"
+        upstream="$(jq -r '.upstream' "$mf")"
+        branch="$(jq -r '.branch' "$mf")"
+      else
+        state="original"; edit_id=""; upstream=""; branch=""
+      fi
+      entries="$(jq -n --argjson e "$entries" \
+        --arg id "$id" --arg name "$name" --argjson kinds "$kinds" \
+        --arg state "$state" --arg editId "$edit_id" --arg upstream "$upstream" --arg branch "$branch" '
+        $e + [{id:$id, name:$name, kinds:$kinds, state:$state,
+               editId: (if $editId == "" then null else $editId end),
+               upstream: (if $upstream == "" then null else $upstream end),
+               branch: (if $branch == "" then null else $branch end)}]')"
+    done < <(omarchy-plugin-catalog 2>/dev/null | jq -c '.[]' 2>/dev/null)
+    entries="$(jq -n --argjson e "$entries" --arg enabled "$enabled" '
+      $e | map(. as $p
+        | (($enabled | split("\n") | map(select(length>0) | split("\t")) | map(select(.[0]==$p.id)) | .[0]) // []) as $s
+        | $p + {enabled: (($s[1] // "false") == "true"), active: (($s[2] // "false") == "true")})
+    ' 2>/dev/null || printf '%s' "$entries")"
+  fi
+  jq -n --argjson plugins "$entries" --arg updatedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    '{version:1, updatedAt:$updatedAt, plugins:$plugins}' > "$CATALOG.tmp"
+  mv "$CATALOG.tmp" "$CATALOG"
+  printf '%s' "$entries"
+}
+
+cmd_list() {
+  need jq
+  local entries; entries="$(write_catalog)"
+  printf '%-40s %-9s %s\n' "PLUGIN" "STATE" "CLONE"
+  jq -r '.[] | [.id, .state, (.editId // "-")] | @tsv' <<<"$entries" |
+    while IFS=$'\t' read -r id state clone; do
+      printf '%-40s %-9s %s\n' "$id" "$state" "$clone"
+    done
+}
+
+cmd_status() {
+  local id="${1:-}"
+  [[ -n "$id" ]] || die "usage: plugpatcher status <plugin-id>"
+  need jq
+  local pd; pd="$(plugin_dir "$id")"
+  [[ -d "$pd" || -f "$(manifest_path "$id")" ]] || die "unknown plugin '$id'"
+  local name; name="$(jq -r '.name // .id' "$(manifest_path "$id")" 2>/dev/null || echo "$id")"
+  printf 'plugin:   %s (%s)\n' "$id" "$name"
+  if ! is_setup "$id"; then
+    printf 'state:    original (not set up for editing)\n'
+    return 0
+  fi
+  local mf repo branch ub upstream edit_id
+  mf="$(meta_file "$id")"; repo="$(repo_dir "$id")"
+  branch="$(jq -r '.branch' "$mf")"; ub="$(jq -r '.upstreamBranch' "$mf")"
+  upstream="$(jq -r '.upstream' "$mf")"; edit_id="$(jq -r '.editId' "$mf")"
+  printf 'state:    editing\n'
+  printf 'clone:    %s\n' "$edit_id"
+  printf 'repo:     %s\n' "$repo"
+  printf 'upstream: %s (%s)\n' "$upstream" "$ub"
+  if [[ "$upstream" != "(stock)" && -d "$repo/.git" ]]; then
+    git -C "$repo" fetch -q origin 2>/dev/null || true
+    local counts; counts="$(git -C "$repo" rev-list --left-right --count "origin/$ub...$branch" 2>/dev/null || echo "0	0")"
+    printf 'behind:   %s commit(s) upstream\n' "$(cut -f1 <<<"$counts")"
+    printf 'ahead:    %s local commit(s)\n' "$(cut -f2 <<<"$counts")"
+    if [[ -n "$(git -C "$repo" status --porcelain)" ]]; then
+      printf 'worktree: dirty\n'
+    else
+      printf 'worktree: clean\n'
+    fi
+  fi
+}
+
+# ------------------------------------------------------------------------ help
+
+usage() {
+  sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'
+}
+
+# ---------------------------------------------------------------------- driver
+
+main() {
+  local cmd="${1:-help}"
+  shift || true
+  git_identity
+  case "$cmd" in
+    list)         cmd_list "$@" ;;
+    status)       cmd_status "$@" ;;
+    setup)        cmd_setup "$@" ;;
+    sync)         cmd_sync "$@" ;;
+    pr)           cmd_pr "$@" ;;
+    remove|rm)    cmd_remove "$@" ;;
+    open)         cmd_open "$@" ;;
+    help|-h|--help) usage ;;
+    version|--version) echo "plugpatcher $VERSION" ;;
+    *) die "unknown command '$cmd' (try: plugpatcher help)" ;;
+  esac
+}
+
+main "$@"

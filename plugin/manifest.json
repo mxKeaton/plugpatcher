@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "id": "plugpatcher",
+  "name": "PlugPatcher",
+  "version": "0.1.0",
+  "author": "mxKeaton",
+  "description": "Edit Omarchy shell plugins while keeping the original untouched and updatable. Lists plugins and drives the plugpatcher CLI.",
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "Panel.qml"
+  },
+  "barWidget": {
+    "displayName": "PlugPatcher",
+    "description": "Manage edited (patched) shell plugins",
+    "category": "System",
+    "allowMultiple": false
+  }
+}
