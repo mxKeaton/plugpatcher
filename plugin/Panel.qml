@@ -247,8 +247,8 @@ Panel {
           Repeater {
             model: [
               { key: "name", label: "Name" },
-              { key: "edits", label: "Last edits" },
-              { key: "updates", label: "Last updates" },
+              { key: "edits", label: "Last Edited" },
+              { key: "updates", label: "Last Updated" },
               { key: "id", label: "ID" }
             ]
 
