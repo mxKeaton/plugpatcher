@@ -31,6 +31,28 @@ Panel {
   property bool busy: false
   property string statusMessage: ""
   property string pendingRevert: ""   // plugin id awaiting revert confirmation
+  property string sortBy: "name"       // name | edits | updates | id
+
+  function cmpPlugins(a, b) {
+    var key = sortBy
+    if (key === "id") return a.id < b.id ? -1 : (a.id > b.id ? 1 : 0)
+    if (key === "edits") return (b.lastEdit || 0) - (a.lastEdit || 0)
+    if (key === "updates") return (b.lastUpdate || 0) - (a.lastUpdate || 0)
+    var an = String(a.name || a.id).toLowerCase()
+    var bn = String(b.name || b.id).toLowerCase()
+    return an < bn ? -1 : (an > bn ? 1 : 0)
+  }
+
+  readonly property var sortedPlugins: {
+    var list = (plugins || []).slice()
+    list.sort(cmpPlugins)
+    return list
+  }
+
+  function fmtDate(ts) {
+    if (!ts) return "—"
+    return Qt.formatDateTime(new Date(ts * 1000), "d MMM yyyy HH:mm")
+  }
 
   function refresh() {
     if (busy) return
@@ -210,6 +232,35 @@ Panel {
 
         PanelSeparator { foreground: Util.alpha(root.fg, 0.15) }
 
+        // ---------------------------------------------------------- sort
+        Row {
+          spacing: Style.space(6)
+
+          Text {
+            text: "Sort"
+            color: root.muted
+            font.family: root.ff
+            font.pixelSize: Style.font.caption
+            anchors.verticalCenter: parent.verticalCenter
+          }
+
+          Repeater {
+            model: [
+              { key: "name", label: "Name" },
+              { key: "edits", label: "Last edits" },
+              { key: "updates", label: "Last updates" },
+              { key: "id", label: "ID" }
+            ]
+
+            ActionButton {
+              required property var modelData
+              text: modelData.label
+              selected: root.sortBy === modelData.key
+              onClicked: root.sortBy = modelData.key
+            }
+          }
+        }
+
         // ---------------------------------------------------------- list
         Flickable {
           width: parent.width
@@ -225,7 +276,7 @@ Panel {
             spacing: Style.space(8)
 
             Repeater {
-              model: root.plugins
+              model: root.sortedPlugins
 
               Rectangle {
                 required property var modelData
@@ -285,6 +336,17 @@ Panel {
                             ? (modelData.id + "  →  " + modelData.editId)
                             : modelData.id
                       color: root.muted
+                      font.family: root.ff
+                      font.pixelSize: Style.font.caption
+                      elide: Text.ElideRight
+                      width: parent.width
+                    }
+
+                    Text {
+                      visible: modelData.state === "editing"
+                      textFormat: Text.PlainText
+                      text: "edited " + root.fmtDate(modelData.lastEdit) + "   ·   updated " + root.fmtDate(modelData.lastUpdate)
+                      color: Util.alpha(root.fg, 0.35)
                       font.family: root.ff
                       font.pixelSize: Style.font.caption
                       elide: Text.ElideRight

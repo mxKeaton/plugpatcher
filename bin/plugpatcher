@@ -114,6 +114,18 @@ repo_default_branch() { # repo -> upstream branch name
 
 rescan() { omarchy-shell -q shell rescanPlugins >/dev/null 2>&1 || true; }
 
+# Record the moment a plugin was last pulled from upstream.
+touch_last_sync() {
+  local mf; mf="$(meta_file "$1")"
+  [[ -f "$mf" ]] || return 0
+  local tmp; tmp="$(mktemp)"
+  if jq --argjson t "$(date +%s)" '.lastSync = $t' "$mf" > "$tmp"; then
+    mv "$tmp" "$mf"
+  else
+    rm -f "$tmp"
+  fi
+}
+
 wait_discovered() { # id
   local id="$1" i
   for (( i = 0; i < 60; i++ )); do
@@ -272,9 +284,10 @@ cmd_setup() {
     --arg branch "$branch" \
     --argjson firstParty "$first_party" \
     --arg createdAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    --argjson lastSync "$(date +%s)" \
     '{version:1, sourceId:$sourceId, editId:$editId, name:$name, upstream:$upstream,
       upstreamBranch:$upstreamBranch, branch:$branch, firstParty:$firstParty,
-      createdAt:$createdAt}' > "$(meta_file "$id")"
+      createdAt:$createdAt, lastSync:$lastSync}' > "$(meta_file "$id")"
 
   generate_clone "$id"
   rescan
@@ -326,6 +339,7 @@ cmd_sync() {
   fi
 
   generate_clone "$id"
+  touch_last_sync "$id"
   rescan
   write_catalog >/dev/null 2>&1 || true
   notify "PlugPatcher: synced $id" "Rebased on origin/$ub"
@@ -534,7 +548,7 @@ write_catalog() {
   local enabled; enabled="$(enabled_map)"
   local entries="[]"
   if command -v omarchy-plugin-catalog >/dev/null 2>&1; then
-    local line id name kinds manifest_path generated mf state edit_id upstream branch
+    local line id name kinds manifest_path generated mf state edit_id upstream branch ub repo_path last_edit last_update
     while IFS= read -r line; do
       [[ -n "$line" ]] || continue
       id="$(jq -r '.id' <<<"$line")"
@@ -553,16 +567,26 @@ write_catalog() {
         edit_id="$(jq -r '.editId' "$mf")"
         upstream="$(jq -r '.upstream' "$mf")"
         branch="$(jq -r '.branch' "$mf")"
+        ub="$(jq -r '.upstreamBranch' "$mf")"
+        repo_path="$(repo_dir "$id")"
+        # Last local-only commit = the most recent patch edit.
+        last_edit="$(git -C "$repo_path" log -1 --format=%ct "origin/$ub..$branch" 2>/dev/null || true)"
+        [[ -n "$last_edit" ]] || last_edit="$(git -C "$repo_path" log -1 --format=%ct "$branch" 2>/dev/null || true)"
+        # Last time sync pulled upstream.
+        last_update="$(jq -r '.lastSync // empty' "$mf" 2>/dev/null || true)"
       else
         state="original"; edit_id=""; upstream=""; branch=""
+        last_edit=""; last_update=""
       fi
       entries="$(jq -n --argjson e "$entries" \
         --arg id "$id" --arg name "$name" --argjson kinds "$kinds" \
-        --arg state "$state" --arg editId "$edit_id" --arg upstream "$upstream" --arg branch "$branch" '
+        --arg state "$state" --arg editId "$edit_id" --arg upstream "$upstream" --arg branch "$branch" \
+        --argjson lastEdit "${last_edit:-null}" --argjson lastUpdate "${last_update:-null}" '
         $e + [{id:$id, name:$name, kinds:$kinds, state:$state,
                editId: (if $editId == "" then null else $editId end),
                upstream: (if $upstream == "" then null else $upstream end),
-               branch: (if $branch == "" then null else $branch end)}]')"
+               branch: (if $branch == "" then null else $branch end),
+               lastEdit: $lastEdit, lastUpdate: $lastUpdate}]')"
     done < <(omarchy-plugin-catalog 2>/dev/null | jq -c '.[]' 2>/dev/null)
     entries="$(jq -n --argjson e "$entries" --arg enabled "$enabled" '
       $e | map(. as $p
