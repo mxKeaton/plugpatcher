@@ -128,6 +128,20 @@ Panel {
     settingsProc.running = true
   }
 
+  function stateLabel(p) {
+    if (!p) return ""
+    if (p.state === "orphaned") return "orphaned"
+    if (p.state === "editing") return p.cloneEnabled ? "patched" : "original"
+    return "original"
+  }
+
+  function stateColor(p) {
+    if (!p) return root.muted
+    if (p.state === "orphaned") return root.danger
+    if (p.state === "editing" && p.cloneEnabled) return Color.accent
+    return root.muted
+  }
+
   function labelFor(options, value) {
     var list = options || []
     for (var i = 0; i < list.length; i++)
@@ -595,10 +609,10 @@ Panel {
                     anchors.rightMargin: Style.space(12)
                     spacing: Style.space(8)
 
-                    // name + state badge
+                    // name + state switch
                     Item {
                       width: parent.width
-                      implicitHeight: Math.max(nameText.implicitHeight, badge.implicitHeight)
+                      implicitHeight: Math.max(nameText.implicitHeight, switchCol.implicitHeight)
 
                       Text {
                         id: nameText
@@ -609,17 +623,46 @@ Panel {
                         font.pixelSize: Style.font.body
                         font.bold: true
                         elide: Text.ElideRight
-                        width: parent.width - badge.width - Style.space(10)
+                        width: parent.width - switchCol.width - Style.space(10)
                         anchors.left: parent.left
                         anchors.verticalCenter: parent.verticalCenter
                       }
 
-                      Badge {
-                        id: badge
+                      // Current side, an arrow, then the other side. Clicking the
+                      // other side switches which install is loaded.
+                      Column {
+                        id: switchCol
                         anchors.right: parent.right
                         anchors.verticalCenter: parent.verticalCenter
-                        label: modelData.state === "editing" ? "patched" : (modelData.state === "orphaned" ? "orphaned" : "original")
-                        textColor: modelData.state === "editing" ? Color.accent : (modelData.state === "orphaned" ? root.danger : root.muted)
+                        spacing: Style.space(2)
+
+                        Badge {
+                          anchors.horizontalCenter: parent.horizontalCenter
+                          label: root.stateLabel(modelData)
+                          textColor: root.stateColor(modelData)
+                        }
+
+                        Text {
+                          visible: modelData.state === "editing"
+                          anchors.horizontalCenter: parent.horizontalCenter
+                          text: "\uf063"
+                          color: root.muted
+                          font.family: root.ff
+                          font.pixelSize: Style.font.caption
+                        }
+
+                        Badge {
+                          visible: modelData.state === "editing"
+                          anchors.horizontalCenter: parent.horizontalCenter
+                          label: modelData.cloneEnabled ? "original" : "patched"
+                          textColor: root.muted
+
+                          MouseArea {
+                            anchors.fill: parent
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: root.runAction(["use", modelData.id, modelData.cloneEnabled ? "original" : "patched"])
+                          }
+                        }
                       }
                     }
 
@@ -687,13 +730,6 @@ Panel {
                         visible: modelData.state === "editing" && root.pendingDelete !== modelData.id
                         text: "Send PR"
                         onClicked: root.runAction(["pr", modelData.id])
-                      }
-
-                      ActionButton {
-                        visible: modelData.state === "editing"
-                        iconText: "\u2913"
-                        tooltipText: modelData.cloneEnabled ? "Switch to original" : "Switch to patched"
-                        onClicked: root.runAction(["use", modelData.id, modelData.cloneEnabled ? "original" : "patched"])
                       }
 
                       ActionButton {
