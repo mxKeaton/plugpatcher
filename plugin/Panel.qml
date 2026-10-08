@@ -32,7 +32,7 @@ Panel {
   property string statusMessage: ""
   property string pendingDelete: ""   // plugin id whose delete prompt is open
   property string pendingPr: ""       // plugin id whose PR options are open
-  property string sortBy: "name"       // name | edits | updates | id
+  property string sortBy: "edits"      // edits | name | id
   property string lastStdout: ""
   property string lastStderr: ""
   property string feedback: ""        // result shown in the feedback box
@@ -67,7 +67,6 @@ Panel {
     var key = sortBy
     if (key === "id") return a.id < b.id ? -1 : (a.id > b.id ? 1 : 0)
     if (key === "edits") return (b.lastEdit || 0) - (a.lastEdit || 0)
-    if (key === "updates") return (b.lastUpdate || 0) - (a.lastUpdate || 0)
     var an = String(a.name || a.id).toLowerCase()
     var bn = String(b.name || b.id).toLowerCase()
     return an < bn ? -1 : (an > bn ? 1 : 0)
@@ -453,10 +452,9 @@ Panel {
 
             Repeater {
               model: [
-                { key: "name", label: "Name" },
-                { key: "id", label: "ID" },
                 { key: "edits", label: "Edited" },
-                { key: "updates", label: "Updated" }
+                { key: "name", label: "Name" },
+                { key: "id", label: "ID" }
               ]
 
               ActionButton {
