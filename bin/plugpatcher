@@ -125,9 +125,12 @@ rescan() { omarchy-shell -q shell rescanPlugins >/dev/null 2>&1 || true; }
 # Make sure the generated clone — not the original — is the plugin being loaded.
 # Heals the state if the original was removed/reinstalled underneath us.
 ensure_active() { # source-id
-  local id="$1" mf edit_id kinds
+  local id="$1" mf edit_id kinds want
   mf="$(meta_file "$id")"
   [[ -f "$mf" ]] || return 0
+  # Respect an explicit switch to the original: do not force the clone back on.
+  want="$(jq -r '.want // "patched"' "$mf" 2>/dev/null || echo patched)"
+  [[ "$want" == "original" ]] && return 0
   edit_id="$(jq -r '.editId' "$mf" 2>/dev/null || true)"
   [[ -n "$edit_id" ]] || return 0
   kinds="$(jq -r '(.kinds // []) | join(",")' "$(manifest_path "$id")" 2>/dev/null || true)"
@@ -145,6 +148,18 @@ touch_last_sync() {
   [[ -f "$mf" ]] || return 0
   local tmp; tmp="$(mktemp)"
   if jq --argjson t "$(date +%s)" '.lastSync = $t' "$mf" > "$tmp"; then
+    mv "$tmp" "$mf"
+  else
+    rm -f "$tmp"
+  fi
+}
+
+# Remember which side the user chose to load (patched|original).
+touch_want() {
+  local mf; mf="$(meta_file "$1")"
+  [[ -f "$mf" ]] || return 0
+  local tmp; tmp="$(mktemp)"
+  if jq --arg w "$2" '.want = $w' "$mf" > "$tmp"; then
     mv "$tmp" "$mf"
   else
     rm -f "$tmp"
@@ -312,9 +327,10 @@ cmd_setup() {
     --argjson firstParty "$first_party" \
     --arg createdAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
     --argjson lastSync "$(date +%s)" \
+    --arg want "patched" \
     '{version:1, sourceId:$sourceId, editId:$editId, name:$name, upstream:$upstream,
       upstreamBranch:$upstreamBranch, branch:$branch, firstParty:$firstParty,
-      createdAt:$createdAt, lastSync:$lastSync}' > "$(meta_file "$id")"
+      createdAt:$createdAt, lastSync:$lastSync, want:$want}' > "$(meta_file "$id")"
 
   generate_clone "$id"
   rescan
@@ -419,8 +435,13 @@ cmd_use() {
 
   case "$want" in
     patched)
+      touch_want "$id" patched
+      if [[ ! -d "$(plugin_dir "$edit_id")" && -d "$(repo_dir "$id")" ]]; then
+        generate_clone "$id" >/dev/null 2>&1 || true
+      fi
       ensure_active "$id" ;;
     original)
+      touch_want "$id" original
       if [[ ",$kinds," == *",bar,"* ]]; then
         omarchy bar use "$id" >/dev/null 2>&1 || true
       fi
@@ -813,7 +834,7 @@ write_catalog() {
 cmd_heal() {
   need jq
   local enabled; enabled="$(enabled_map)"
-  local mfile sid edit_id clone_enabled
+  local mfile sid edit_id clone_enabled want
   local -a rebuilt=() activate=()
   while IFS= read -r mfile; do
     [[ -n "$mfile" ]] || continue
@@ -822,6 +843,9 @@ cmd_heal() {
     [[ -n "$sid" && -n "$edit_id" ]] || continue
     # Orphaned (original gone): nothing to heal, the panel offers Delete.
     [[ -d "$(plugin_dir "$sid")" ]] || continue
+    # The user explicitly chose the original: leave it alone.
+    want="$(jq -r '.want // "patched"' "$mfile" 2>/dev/null || echo patched)"
+    [[ "$want" == "original" ]] && continue
 
     if [[ ! -d "$(plugin_dir "$edit_id")" ]]; then
       # Metadata without a clone: rebuild it from the repo.
