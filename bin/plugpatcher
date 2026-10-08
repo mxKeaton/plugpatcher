@@ -740,6 +740,31 @@ write_catalog() {
   printf '%s' "$entries"
 }
 
+# Re-assert that every adopted plugin's clone is the one that is enabled. This
+# heals the case where the original was removed and reinstalled underneath a
+# patch: the clone stays on disk but goes dormant, so the changes vanish.
+cmd_heal() {
+  need jq
+  local enabled; enabled="$(enabled_map)"
+  local mfile sid edit_id clone_enabled
+  while IFS= read -r mfile; do
+    [[ -n "$mfile" ]] || continue
+    sid="$(jq -r '.sourceId // empty' "$mfile" 2>/dev/null || true)"
+    edit_id="$(jq -r '.editId // empty' "$mfile" 2>/dev/null || true)"
+    [[ -n "$sid" && -n "$edit_id" ]] || continue
+    # Only heal when both the original and the clone still exist (orphans are
+    # left for the user to Delete).
+    [[ -d "$(plugin_dir "$sid")" && -d "$(plugin_dir "$edit_id")" ]] || continue
+    clone_enabled="$(awk -F '\t' -v id="$edit_id" '$1 == id { print $2 }' <<<"$enabled")"
+    if [[ "$clone_enabled" != "true" ]]; then
+      log "re-activating $edit_id"
+      ensure_active "$sid"
+    fi
+  done < <(find "$DATA_DIR" -mindepth 1 -maxdepth 1 -name '*.json' ! -name 'catalog.json' -print 2>/dev/null)
+  rescan
+  write_catalog >/dev/null 2>&1 || true
+}
+
 cmd_list() {
   need jq
   local entries; entries="$(write_catalog)"
@@ -805,6 +830,7 @@ Commands:
   files <id>           open the patch folder in the default file manager
   editor <id>          open the patch folder in the default editor
   config [k] [v]       show or set config (config.json)
+  heal                 re-activate adopted clones that went dormant
   settings             machine-readable settings for the panel (JSON)
   help                 this text
 USAGE
@@ -827,6 +853,7 @@ main() {
     files)        cmd_open_files "$@" ;;
     editor)       cmd_open_editor "$@" ;;
     config)       cmd_config "$@" ;;
+    heal)         cmd_heal "$@" ;;
     settings)     cmd_settings "$@" ;;
     help|-h|--help) usage ;;
     version|--version) echo "plugpatcher $VERSION" ;;

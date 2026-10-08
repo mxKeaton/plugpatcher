@@ -49,6 +49,7 @@ The clone carries `omarchy.clonedFrom = <id>`, so the shell:
 | `plugpatcher files <id>` | open the patch folder in the default file manager |
 | `plugpatcher editor <id>` | open the patch folder in the default editor |
 | `plugpatcher config [k] [v]` | show or set config (`~/.config/plugpatcher/config.json`) |
+| `plugpatcher heal` | re-activate adopted clones that went dormant (the panel runs this on refresh) |
 | `plugpatcher help` | usage |
 
 ## Config

@@ -165,10 +165,10 @@ Panel {
 
   Process {
     id: listProc
-    command: [root.cli, "list"]
+    command: [root.cli, "heal"]
     stdout: StdioCollector { id: listOut; waitForEnd: true }
     onExited: function(code) {
-      if (code !== 0) root.statusMessage = "list failed (exit " + code + ")"
+      if (code !== 0) root.statusMessage = "refresh failed (exit " + code + ")"
       Qt.callLater(root.reload)
     }
   }
