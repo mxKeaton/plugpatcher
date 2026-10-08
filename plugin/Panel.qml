@@ -39,6 +39,7 @@ Panel {
   property string progress: ""        // text shown while an action runs
   property string lastAction: ""      // verb of the running/last action
   property string lastActionId: ""    // plugin id of the running/last action
+  property bool cancelRequested: false // user aborted an in-flight PR
   property bool cliAvailable: true
   property bool settingsOpen: false
   property string picking: ""          // "" | "harness" | "model"
@@ -233,6 +234,12 @@ Panel {
       // Let the stream collectors finish before reading their text.
       Qt.callLater(function() {
         root.busy = false
+        if (root.cancelRequested) {
+          root.cancelRequested = false
+          // Close a PR the aborted run may already have opened.
+          root.runAction(["pr-cancel", root.lastActionId])
+          return
+        }
         var out = String(root.lastStdout || "").trim()
         var err = String(root.lastStderr || "").trim()
         if (code === 0) {
@@ -488,6 +495,17 @@ Panel {
             Row {
               spacing: Style.space(6)
 
+              // While the PR is being created: abort it.
+              ActionButton {
+                visible: root.busy && root.lastAction === "pr" && root.lastActionId !== ""
+                text: "Cancel PR"
+                onClicked: {
+                  root.cancelRequested = true
+                  actionProc.running = false
+                }
+              }
+
+              // After it finished: close the PR that was created.
               ActionButton {
                 visible: !root.busy && root.lastAction === "pr" && root.lastActionId !== ""
                 text: "Cancel PR"

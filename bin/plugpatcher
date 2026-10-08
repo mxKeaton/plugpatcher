@@ -664,16 +664,42 @@ cmd_pr() {
   printf '%s\n' "$pr_url"
 }
 
-# Close the pull request most recently opened for a plugin.
+# Close the open pull request for a plugin's current patch (or the last one
+# opened). Never fails when there is nothing to cancel.
 cmd_pr_cancel() {
   local id="${1:-}"
   [[ -n "$id" ]] || die "usage: plugpatcher pr-cancel <plugin-id>"
   is_setup "$id" || die "'$id' is not set up"
-  need gh
-  local mf url
+  need git; need jq; need gh
+  local mf repo branch ub upstream slug base pid remote_branch url state
   mf="$(meta_file "$id")"
-  url="$(jq -r '.lastPr // empty' "$mf" 2>/dev/null || true)"
-  [[ -n "$url" ]] || die "no pull request is recorded for '$id'"
+  repo="$(require_repo "$id")"
+  branch="$(jq -r '.branch' "$mf")"
+  ub="$(jq -r '.upstreamBranch' "$mf")"
+  upstream="$(jq -r '.upstream' "$mf")"
+  slug="$(github_slug "$upstream")" || die "'$id' upstream is not GitHub"
+
+  # Same branch naming as `pr`, so we close the PR for the *current* patch.
+  remote_branch="plugpatcher/$id"
+  base="$(git -C "$repo" merge-base "$branch" "origin/$ub" 2>/dev/null || true)"
+  if [[ -n "$base" ]]; then
+    pid="$(git -C "$repo" diff "$base" "$branch" 2>/dev/null | git patch-id --stable 2>/dev/null | awk 'NR==1{print $1}')"
+  fi
+  [[ -n "$pid" ]] && remote_branch="plugpatcher/$id-${pid:0:10}"
+
+  url="$(gh pr list --repo "$slug" --head "$remote_branch" --state open --json url --jq '.[0].url // empty' 2>/dev/null || true)"
+  [[ -n "$url" ]] || url="$(jq -r '.lastPr // empty' "$mf" 2>/dev/null || true)"
+  if [[ -n "$url" ]]; then
+    state="$(gh pr view "$url" --json state --jq .state 2>/dev/null || true)"
+    [[ "$state" == "OPEN" ]] || url=""
+  fi
+
+  if [[ -z "$url" ]]; then
+    log "no open pull request for '$id'"
+    printf 'no open pull request for %s\n' "$id"
+    return 0
+  fi
+
   gh pr close "$url" --comment "Withdrawn via PlugPatcher." >/dev/null 2>&1 \
     || die "could not close $url"
   meta_set "$id" lastPr ""
