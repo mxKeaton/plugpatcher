@@ -816,7 +816,7 @@ Panel {
                       MouseArea {
                         anchors.fill: parent
                         cursorShape: Qt.PointingHandCursor
-                        onClicked: root.runAction(["use", modelData.id, modelData.cloneEnabled ? "original" : "patched"])
+                        onClicked: root.runAction(["use", modelData.id, "toggle"])
                       }
                     }
                   }

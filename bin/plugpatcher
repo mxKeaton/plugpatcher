@@ -439,12 +439,21 @@ cmd_revert() {
 # Switch between the patched clone and the original (enable/disable only).
 cmd_use() {
   local id="${1:-}" want="${2:-}"
-  [[ -n "$id" ]] || die "usage: plugpatcher use <plugin-id> <patched|original>"
+  [[ -n "$id" ]] || die "usage: plugpatcher use <plugin-id> <patched|original|toggle>"
   is_setup "$id" || die "'$id' is not set up"
   local mf edit_id kinds
   mf="$(meta_file "$id")"
   edit_id="$(jq -r '.editId' "$mf")"
   kinds="$(jq -r '(.kinds // []) | join(",")' "$(manifest_path "$id")" 2>/dev/null || true)"
+
+  # 'toggle' decides from the live enabled state, not a cached catalog, so a
+  # stale button label cannot switch the wrong way.
+  if [[ "$want" == "toggle" ]]; then
+    local enabled clone_on
+    enabled="$(enabled_map)"
+    clone_on="$(awk -F '\t' -v e="$edit_id" '$1 == e { print $2 }' <<<"$enabled")"
+    [[ "$clone_on" == "true" ]] && want=original || want=patched
+  fi
 
   case "$want" in
     patched)
@@ -461,7 +470,7 @@ cmd_use() {
       omarchy plugin disable "$edit_id" >/dev/null 2>&1 || true
       omarchy plugin enable "$id" >/dev/null 2>&1 || true ;;
     *)
-      die "usage: plugpatcher use <plugin-id> <patched|original>" ;;
+      die "usage: plugpatcher use <plugin-id> <patched|original|toggle>" ;;
   esac
 
   rescan
