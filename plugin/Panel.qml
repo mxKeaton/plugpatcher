@@ -691,7 +691,7 @@ Panel {
 
                       ActionButton {
                         visible: (modelData.state === "editing" || modelData.state === "orphaned") && root.pendingRevert !== modelData.id
-                        text: "Revert"
+                        text: modelData.state === "orphaned" ? "Delete" : "Revert"
                         foreground: root.danger
                         onClicked: root.pendingRevert = modelData.id
                       }
@@ -704,7 +704,9 @@ Panel {
 
                       Text {
                         textFormat: Text.PlainText
-                        text: "Revert all edits and restore the original?"
+                        text: modelData.state === "orphaned"
+                              ? "Delete this orphaned patch (repo + clone)?"
+                              : "Revert all edits and restore the original?"
                         color: root.danger
                         font.family: root.ff
                         font.pixelSize: Style.font.bodySmall
@@ -712,7 +714,7 @@ Panel {
                       }
 
                       ActionButton {
-                        text: "Yes, revert"
+                        text: modelData.state === "orphaned" ? "Yes, delete" : "Yes, revert"
                         foreground: root.danger
                         onClicked: {
                           var target = modelData.id
