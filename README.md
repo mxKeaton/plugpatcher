@@ -44,6 +44,19 @@ plugpatcher pr <plugin-id>           # open a PR for your changes
 plugpatcher remove <plugin-id>       # stop editing; restore the original
 ```
 
+### Harness (the **AI** button)
+
+`plugpatcher open <id>` launches your default coding agent by default. To open a
+harness instead (Herdr, tmux, …) set the `ai` config command:
+
+```bash
+plugpatcher config ai "omarchy launch terminal herdr"
+```
+
+`{dir}` in the command is replaced with the repo path, and the command runs in
+the repo. Omarchy has no "default harness" setting of its own — this is where
+you point PlugPatcher at whatever you use.
+
 Edit files in `~/.local/share/plugpatcher/<id>/` (the repo), then
 `plugpatcher sync <id>` to regenerate the loaded clone. `sync` only merges when
 there is no conflict; on conflict it aborts, changes nothing, and notifies you.

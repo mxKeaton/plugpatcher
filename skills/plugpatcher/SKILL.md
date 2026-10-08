@@ -45,8 +45,20 @@ The clone carries `omarchy.clonedFrom = <id>`, so the shell:
 | `plugpatcher sync <id>` | `git fetch` upstream, rebase your branch, regenerate the clone; aborts on conflict |
 | `plugpatcher pr <id>` | fork if needed, push your branch, open a PR against upstream |
 | `plugpatcher remove <id>` | restore the original, delete/backup the repo |
-| `plugpatcher open <id>` | launch the system default agent in the repo, resuming its session |
+| `plugpatcher open <id>` | launch the configured harness, or the system default agent, in the repo |
+| `plugpatcher files <id>` | open the patch folder in the default file manager |
+| `plugpatcher editor <id>` | open the patch folder in the default editor |
+| `plugpatcher config [k] [v]` | show or set config (`~/.config/plugpatcher/config.json`) |
 | `plugpatcher help` | usage |
+
+## Config
+
+`~/.config/plugpatcher/config.json`:
+
+- `ai` — command run by `open` instead of the default agent. `{dir}` is
+  replaced with the repo path and the command runs there. Example:
+  `{"ai": "omarchy launch terminal herdr"}`. There is no Omarchy "default
+  harness" setting; point this at whatever harness you use (Herdr, tmux, …).
 
 ## The workflow an AI should follow
 

@@ -34,6 +34,7 @@ DATA_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/plugpatcher"
 STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/plugpatcher"
 AGENT_FILE="$HOME/.config/omarchy/defaults/agent"
 CATALOG="$DATA_DIR/catalog.json"
+CONFIG_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/plugpatcher/config.json"
 
 # Extra `git -c` args used when the user has no identity configured, so internal
 # rebases/commits never fail on a machine where Omarchy's git setup was skipped.
@@ -494,6 +495,17 @@ cmd_open() {
   is_setup "$id" || die "'$id' is not set up for editing (run: plugpatcher setup $id)"
   local repo; repo="$(require_repo "$id")"
 
+  # A configured harness command (config.json "ai") wins over the agent.
+  # `{dir}` in the command is replaced with the repo path; it runs in the repo.
+  local ai_cmd
+  ai_cmd="$(jq -r '.ai // empty' "$CONFIG_FILE" 2>/dev/null || true)"
+  if [[ -n "$ai_cmd" ]]; then
+    ai_cmd="${ai_cmd//\{dir\}/$repo}"
+    log "opening harness: $ai_cmd"
+    ( cd "$repo" && setsid bash -lc "$ai_cmd" >/dev/null 2>&1 & )
+    return 0
+  fi
+
   command -v omarchy-default-agent >/dev/null 2>&1 || die "omarchy-default-agent is not available"
   local agent; agent="$(omarchy-default-agent 2>/dev/null || true)"
   if [[ -z "$agent" ]]; then
@@ -546,6 +558,27 @@ cmd_open_editor() {
 
   log "opening $editor in: $repo"
   setsid omarchy-launch-editor "$repo" >/dev/null 2>&1 &
+}
+
+# ---------------------------------------------------------------------- config
+
+cmd_config() {
+  local key="${1:-}" value="${2:-}"
+  mkdir -p "$(dirname "$CONFIG_FILE")"
+  [[ -f "$CONFIG_FILE" ]] || printf '{}\n' > "$CONFIG_FILE"
+  if [[ -z "$key" ]]; then
+    cat "$CONFIG_FILE"
+    return 0
+  fi
+  [[ -n "$value" ]] || die "usage: plugpatcher config <key> <value>"
+  local tmp; tmp="$(mktemp)"
+  if jq --arg k "$key" --arg v "$value" '.[$k] = $v' "$CONFIG_FILE" > "$tmp"; then
+    mv "$tmp" "$CONFIG_FILE"
+    log "set $key = $value"
+  else
+    rm -f "$tmp"
+    die "could not update $CONFIG_FILE"
+  fi
 }
 
 # ------------------------------------------------------------------ list/status
@@ -676,6 +709,7 @@ Commands:
   open <id>            launch the default agent in the repo, resuming its session
   files <id>           open the patch folder in the default file manager
   editor <id>          open the patch folder in the default editor
+  config [k] [v]       show or set config (config.json, e.g. ai = harness command)
   help                 this text
 USAGE
 }
@@ -696,6 +730,7 @@ main() {
     open)         cmd_open "$@" ;;
     files)        cmd_open_files "$@" ;;
     editor)       cmd_open_editor "$@" ;;
+    config)       cmd_config "$@" ;;
     help|-h|--help) usage ;;
     version|--version) echo "plugpatcher $VERSION" ;;
     *) die "unknown command '$cmd' (try: plugpatcher help)" ;;
