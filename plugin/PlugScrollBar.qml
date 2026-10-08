@@ -28,15 +28,17 @@ Item {
 
   Rectangle {
     id: track
-    anchors.fill: parent
+    anchors.horizontalCenter: parent.horizontalCenter
+    width: Math.round(root.width * 0.75)
+    height: root.height
     color: Util.alpha(root.foreground, 0.08)
   }
 
   Rectangle {
     id: handle
-    x: 0
+    anchors.horizontalCenter: parent.horizontalCenter
     y: root.handleY
-    width: root.width
+    width: track.width
     height: root.handleHeight
     color: Util.alpha(root.foreground, dragArea.pressed ? 0.6 : 0.38)
   }
