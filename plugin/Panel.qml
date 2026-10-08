@@ -248,8 +248,9 @@ Panel {
   component Badge: Rectangle {
     property string label: ""
     property color textColor: root.muted
-    implicitWidth: badgeText.implicitWidth + Style.space(12)
-    implicitHeight: badgeText.implicitHeight + Style.space(4)
+    property real factor: 1
+    implicitWidth: badgeText.implicitWidth + Style.space(12 * factor)
+    implicitHeight: badgeText.implicitHeight + Style.space(4 * factor)
     radius: height / 2
     color: Util.alpha(root.fg, 0.06)
     border.width: 1
@@ -261,7 +262,7 @@ Panel {
       text: parent.label
       color: parent.textColor
       font.family: root.ff
-      font.pixelSize: Style.font.caption
+      font.pixelSize: Math.max(8, Math.round(Style.font.caption * factor))
       font.bold: true
     }
   }
@@ -643,9 +644,7 @@ Panel {
                         spacing: Style.space(2)
 
                         Badge {
-                          id: curBadge
                           anchors.horizontalCenter: parent.horizontalCenter
-                          width: Math.max(curBadge.implicitWidth, otherBadge.implicitWidth)
                           label: root.stateLabel(modelData)
                           textColor: root.stateColor(modelData)
                         }
@@ -663,7 +662,7 @@ Panel {
                           id: otherBadge
                           visible: modelData.state === "editing"
                           anchors.horizontalCenter: parent.horizontalCenter
-                          width: Math.max(curBadge.implicitWidth, otherBadge.implicitWidth)
+                          factor: 2 / 3
                           label: modelData.cloneEnabled ? "original" : "patched"
                           textColor: root.badgeColorFor(modelData.cloneEnabled ? "original" : "patched")
 
