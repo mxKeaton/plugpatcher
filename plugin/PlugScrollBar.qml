@@ -24,23 +24,26 @@ Item {
   }
 
   visible: scrollable
-  implicitWidth: Style.space(12)
+  implicitWidth: Style.space(16)
 
   Rectangle {
-    anchors.fill: parent
-    anchors.leftMargin: Style.space(3)
+    id: track
+    anchors.horizontalCenter: parent.horizontalCenter
+    y: 0
+    width: Style.space(10)
+    height: root.height
     radius: width / 2
     color: Util.alpha(root.foreground, 0.08)
   }
 
   Rectangle {
     id: handle
-    x: Style.space(3)
+    anchors.horizontalCenter: parent.horizontalCenter
     y: root.handleY
-    width: root.width - Style.space(6)
+    width: Style.space(6)
     height: root.handleHeight
     radius: width / 2
-    color: Util.alpha(root.foreground, dragArea.pressed ? 0.55 : 0.32)
+    color: Util.alpha(root.foreground, dragArea.pressed ? 0.6 : 0.38)
   }
 
   MouseArea {
