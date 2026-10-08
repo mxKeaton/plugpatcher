@@ -636,7 +636,9 @@ cmd_pr() {
   # Manual: just open GitHub's PR form with the branch selected, leaving the
   # title and description for the user to write.
   if [[ "$mode" == "manual" ]]; then
-    local compare_url="https://github.com/$slug/compare/$ub...$me:$remote_branch?expand=1"
+    # Pass empty title/body so GitHub does not pre-fill them from the branch
+    # name or the commit list.
+    local compare_url="https://github.com/$slug/compare/$ub...$me:$remote_branch?expand=1&title=&body="
     log "opening $compare_url"
     open_url "$compare_url"
     printf '%s\n' "$compare_url"
