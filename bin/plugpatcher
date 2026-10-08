@@ -382,16 +382,9 @@ cmd_revert() {
   edit_id="$(jq -r '.editId' "$mf")"
   kinds="$(jq -r '(.kinds // []) | join(",")' "$(manifest_path "$id")" 2>/dev/null || true)"
 
-  if [[ ",$kinds," == *",bar,"* ]]; then
-    omarchy bar use "$id" >/dev/null 2>&1 || true
-    omarchy plugin enable "$id" >/dev/null 2>&1 || true
-  else
-    omarchy plugin enable "$id" >/dev/null 2>&1 || true
-  fi
-  omarchy plugin disable "$edit_id" >/dev/null 2>&1 || true
-
-  rm -rf "$(plugin_dir "$edit_id")"
-  rm -f "$mf"
+  # Tear down the edit artifacts FIRST. The shell toggles below can trigger a
+  # plugin reload, which may kill this process mid-run; doing the file cleanup
+  # first guarantees the patch is really gone even if that happens.
   if [[ "$keep_repo" == "--keep-repo" ]]; then
     log "kept repository at $(repo_dir "$id")"
   else
@@ -399,6 +392,15 @@ cmd_revert() {
     mkdir -p "$(dirname "$backup")"
     [[ -d "$(repo_dir "$id")" ]] && mv "$(repo_dir "$id")" "$backup" && log "repository backed up to $backup"
   fi
+  rm -rf "$(plugin_dir "$edit_id")"
+  rm -f "$mf"
+
+  # Put the original back (disable the clone restores the source; enable is a
+  # belt-and-braces no-op when it is already there).
+  omarchy plugin disable "$edit_id" >/dev/null 2>&1 || true
+  [[ ",$kinds," == *",bar,"* ]] && omarchy bar use "$id" >/dev/null 2>&1 || true
+  omarchy plugin enable "$id" >/dev/null 2>&1 || true
+
   rescan
   write_catalog >/dev/null 2>&1 || true
   notify "PlugPatcher: reverted $id" "Original plugin restored"
