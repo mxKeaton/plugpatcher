@@ -38,6 +38,7 @@ Panel {
   property bool feedbackError: false
   property bool cliAvailable: true
   property bool settingsOpen: false
+  property string picking: ""          // "" | "harness" | "model"
   property bool pendingConfigChange: false
   property var settings: ({ harness: "default", model: "", command: "", harnesses: [], models: [] })
 
@@ -47,7 +48,7 @@ Panel {
   Process {
     id: cliCheck
     command: ["bash", "-c", "test -x \"$1\"", "bash", root.cli]
-    onExited: function(code) { root.cliAvailable = code === 0 }
+    onExited: function(code) { root.cliAvailable = code === 0; if (root.cliAvailable) root.loadSettings() }
   }
 
   function cmpPlugins(a, b) {
@@ -116,11 +117,19 @@ Panel {
   }
 
   onOpenedChanged: if (opened) refresh()
-  onSettingsOpenChanged: if (settingsOpen) loadSettings()
+  onSettingsOpenChanged: if (settingsOpen) { cliCheck.running = true; loadSettings() }
 
   function loadSettings() {
-    if (!cliAvailable) return
     settingsProc.running = true
+  }
+
+  function labelFor(options, value) {
+    var list = options || []
+    for (var i = 0; i < list.length; i++)
+      if (String(list[i].value) === String(value)) return list[i].label
+    if (value === undefined || value === null || value === "")
+      return list.length > 0 ? list[0].label : "Default"
+    return String(value)
   }
 
   function parseSettings(raw) {
@@ -402,30 +411,44 @@ Panel {
 
         // ---------------------------------------------------------- settings
         Column {
-          visible: root.settingsOpen
+          visible: root.settingsOpen && root.picking === ""
           width: parent.width
-          spacing: Style.space(14)
+          spacing: Style.space(10)
 
-          Dropdown {
-            width: parent.width
-            label: "AI harness"
-            value: root.settings.harness || "default"
-            options: root.settings.harnesses || []
-            foreground: root.fg
-            fontFamily: root.ff
-            enabled: !root.busy
-            onChanged: function(v) { root.setConfig("harness", v) }
+          Text {
+            text: "AI"
+            color: root.muted
+            font.family: root.ff
+            font.pixelSize: Style.font.caption
+            font.bold: true
           }
 
-          Dropdown {
+          Button {
             width: parent.width
-            label: "Model"
-            value: root.settings.model || ""
-            options: root.settings.models || []
+            leftAlign: true
+            text: "AI harness:  " + root.labelFor(root.settings.harnesses, root.settings.harness)
             foreground: root.fg
             fontFamily: root.ff
+            fontSize: Style.font.body
+            bordered: true
             enabled: !root.busy
-            onChanged: function(v) { root.setConfig("model", v) }
+            horizontalPadding: Style.space(10)
+            verticalPadding: Style.space(6)
+            onClicked: root.picking = "harness"
+          }
+
+          Button {
+            width: parent.width
+            leftAlign: true
+            text: "Model:  " + root.labelFor(root.settings.models, root.settings.model)
+            foreground: root.fg
+            fontFamily: root.ff
+            fontSize: Style.font.body
+            bordered: true
+            enabled: !root.busy
+            horizontalPadding: Style.space(10)
+            verticalPadding: Style.space(6)
+            onClicked: root.picking = "model"
           }
 
           Text {
@@ -438,6 +461,76 @@ Panel {
             text: root.settings.harness === "custom"
                   ? "Custom command: set with  plugpatcher config command \"<cmd>\"   ({dir} = repo path)"
                   : "What the AI button opens, inside each plugin's repo."
+          }
+        }
+
+        // ---------------------------------------------------------- picker
+        Column {
+          visible: root.settingsOpen && root.picking !== ""
+          width: parent.width
+          spacing: Style.space(10)
+
+          Row {
+            spacing: Style.space(8)
+
+            Button {
+              text: "\uf060  Back"
+              foreground: root.fg
+              fontFamily: root.ff
+              fontSize: Style.font.bodySmall
+              bordered: true
+              horizontalPadding: Style.space(10)
+              verticalPadding: Style.space(4)
+              onClicked: root.picking = ""
+            }
+
+            Text {
+              text: root.picking === "harness" ? "Choose AI harness" : "Choose model"
+              color: root.fg
+              font.family: root.ff
+              font.pixelSize: Style.font.body
+              font.bold: true
+              anchors.verticalCenter: parent.verticalCenter
+            }
+          }
+
+          Flickable {
+            width: parent.width
+            height: Math.min(pickColumn.implicitHeight, Style.space(430))
+            contentWidth: width
+            contentHeight: pickColumn.implicitHeight
+            clip: true
+            boundsBehavior: Flickable.StopAtBounds
+
+            Column {
+              id: pickColumn
+              width: parent.width
+              spacing: Style.space(4)
+
+              Repeater {
+                model: root.picking === "harness" ? (root.settings.harnesses || []) : (root.settings.models || [])
+
+                Button {
+                  required property var modelData
+                  width: pickColumn.width
+                  leftAlign: true
+                  text: modelData.label
+                  selected: String(modelData.value) === String(root.picking === "harness" ? root.settings.harness : root.settings.model)
+                  foreground: root.fg
+                  fontFamily: root.ff
+                  fontSize: Style.font.body
+                  bordered: true
+                  enabled: !root.busy
+                  horizontalPadding: Style.space(10)
+                  verticalPadding: Style.space(5)
+                  onClicked: {
+                    var target = root.picking
+                    root.setConfig(target, modelData.value)
+                    root.picking = ""
+                  }
+                }
+              }
+            }
           }
         }
 
