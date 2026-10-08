@@ -489,42 +489,75 @@ cmd_pr() {
 
 # ------------------------------------------------------------------------ open
 
+# Read a config value from ~/.config/plugpatcher/config.json.
+cfg_get() { jq -r --arg k "$1" '.[$k] // empty' "$CONFIG_FILE" 2>/dev/null || true; }
+
+# Interactive launch args for an Omarchy agent, one per line.
+agent_command() { # agent model
+  local agent="$1" model="$2"
+  local -a cmd
+  case "$agent" in
+    pi)           cmd=(pi --continue) ;;
+    claude)       cmd=(claude --permission-mode auto --continue) ;;
+    opencode)     cmd=(opencode --auto --continue) ;;
+    codex)        cmd=(codex --approve-for-me resume --last) ;;
+    gemini)       cmd=(gemini --yolo --resume) ;;
+    crush)        cmd=(crush --yolo) ;;
+    omp)          cmd=(omp --auto-approve) ;;
+    grok)         cmd=(grok --permission-mode bypassPermissions) ;;
+    copilot)      cmd=(copilot --allow-all) ;;
+    cursor-agent) cmd=(cursor-agent --yolo --trust agent) ;;
+    hermes)       cmd=(hermes --yolo) ;;
+    muse)         cmd=(muse --approval-mode never) ;;
+    openclaw)     cmd=(omarchy-launch-openclaw --tui) ;;
+    *)            warn "no known launch flags for '$agent'; launching it directly"; cmd=("$agent") ;;
+  esac
+  if [[ -n "$model" && "$agent" != "openclaw" ]]; then
+    cmd+=(--model "$model")
+  fi
+  printf '%s\n' "${cmd[@]}"
+}
+
 cmd_open() {
   local id="${1:-}"
   [[ -n "$id" ]] || die "usage: plugpatcher open <plugin-id>"
   is_setup "$id" || die "'$id' is not set up for editing (run: plugpatcher setup $id)"
   local repo; repo="$(require_repo "$id")"
 
-  # A configured harness command (config.json "ai") wins over the agent.
-  # `{dir}` in the command is replaced with the repo path; it runs in the repo.
-  local ai_cmd
-  ai_cmd="$(jq -r '.ai // empty' "$CONFIG_FILE" 2>/dev/null || true)"
-  if [[ -n "$ai_cmd" ]]; then
-    ai_cmd="${ai_cmd//\{dir\}/$repo}"
-    log "opening harness: $ai_cmd"
-    ( cd "$repo" && setsid bash -lc "$ai_cmd" >/dev/null 2>&1 & )
-    return 0
-  fi
+  local harness model custom
+  harness="$(cfg_get harness)"; model="$(cfg_get model)"; custom="$(cfg_get command)"
+  [[ -z "$harness" ]] && harness="default"
 
-  command -v omarchy-default-agent >/dev/null 2>&1 || die "omarchy-default-agent is not available"
-  local agent; agent="$(omarchy-default-agent 2>/dev/null || true)"
-  if [[ -z "$agent" ]]; then
-    die "no default agent is set (choose one with: omarchy default agent <name>)"
-  fi
-  command -v "$agent" >/dev/null 2>&1 || die "default agent '$agent' is set but not installed"
-
-  local -a cmd
-  case "$agent" in
-    pi)        cmd=(pi --continue) ;;
-    claude)    cmd=(claude --permission-mode auto --continue) ;;
-    opencode)  cmd=(opencode --auto --continue) ;;
-    codex)     cmd=(codex --approve-for-me resume --last) ;;
-    gemini)    cmd=(gemini --yolo --resume) ;;
-    crush)     cmd=(crush --yolo) ;;
-    omp)       cmd=(omp --auto-approve) ;;
-    *)         warn "no known resume flag for '$agent'; launching without resume"; cmd=("$agent") ;;
+  case "$harness" in
+    custom)
+      [[ -n "$custom" ]] || die "no custom command set (plugpatcher config command \"<cmd>\")"
+      custom="${custom//\{dir\}/$repo}"
+      log "opening custom command: $custom"
+      ( cd "$repo" && setsid bash -lc "$custom" >/dev/null 2>&1 & )
+      return 0 ;;
+    herdr)
+      command -v herdr >/dev/null 2>&1 || die "herdr is set as the AI harness but is not installed"
+      log "opening harness: Herdr"
+      ( cd "$repo" && setsid bash -lc "omarchy launch terminal herdr" >/dev/null 2>&1 & )
+      return 0 ;;
+    tmux)
+      command -v tmux >/dev/null 2>&1 || die "tmux is set as the AI harness but is not installed"
+      log "opening harness: tmux"
+      ( cd "$repo" && setsid bash -lc "omarchy launch terminal tmux" >/dev/null 2>&1 & )
+      return 0 ;;
   esac
 
+  local agent
+  if [[ "$harness" == "default" ]]; then
+    command -v omarchy-default-agent >/dev/null 2>&1 || die "omarchy-default-agent is not available"
+    agent="$(omarchy-default-agent 2>/dev/null || true)"
+    [[ -n "$agent" ]] || die "no default agent is set (choose one with: omarchy default agent <name>)"
+  else
+    agent="$harness"
+  fi
+  command -v "$agent" >/dev/null 2>&1 || die "'$agent' is set as the AI harness but is not installed"
+
+  local -a cmd; mapfile -t cmd < <(agent_command "$agent" "$model")
   log "opening $agent in $repo"
   cd "$repo"
   exec omarchy-launch-tui --app-id=org.omarchy.agent "${cmd[@]}"
@@ -579,6 +612,38 @@ cmd_config() {
     rm -f "$tmp"
     die "could not update $CONFIG_FILE"
   fi
+}
+
+# Machine-readable settings for the panel: installed harnesses + models.
+cmd_settings() {
+  local harness model custom
+  harness="$(cfg_get harness)"; model="$(cfg_get model)"; custom="$(cfg_get command)"
+  [[ -z "$harness" ]] && harness="default"
+
+  local harnesses='[]' a
+  harnesses="$(jq -cn --argjson h "$harnesses" '$h + [{value:"default",label:"System default agent"}]')"
+  for a in pi omp opencode claude codex grok gemini openclaw hermes copilot crush cursor-agent muse; do
+    command -v "$a" >/dev/null 2>&1 || continue
+    harnesses="$(jq -cn --arg a "$a" --argjson h "$harnesses" '$h + [{value:$a,label:$a}]')"
+  done
+  command -v herdr >/dev/null 2>&1 && harnesses="$(jq -cn --argjson h "$harnesses" '$h + [{value:"herdr",label:"Herdr"}]')"
+  command -v tmux >/dev/null 2>&1 && harnesses="$(jq -cn --argjson h "$harnesses" '$h + [{value:"tmux",label:"tmux"}]')"
+  harnesses="$(jq -cn --argjson h "$harnesses" '$h + [{value:"custom",label:"Custom command\u2026"}]')"
+
+  local models='[{"value":"","label":"Default model"}]'
+  if [[ "$harness" == "pi" || "$harness" == "default" ]]; then
+    local store="$HOME/.pi/agent/models-store.json"
+    if [[ -f "$store" ]]; then
+      while IFS=$'\t' read -r mid mlabel; do
+        [[ -n "$mid" ]] || continue
+        models="$(jq -cn --arg v "$mid" --arg l "$mlabel" --argjson m "$models" '$m + [{value:$v,label:$l}]')"
+      done < <(jq -r 'to_entries[] as $p | $p.value.models[] | "\($p.key)/\(.id)\t\(.name) (\($p.key))"' "$store" 2>/dev/null)
+    fi
+  fi
+
+  jq -n --arg harness "$harness" --arg model "$model" --arg command "$custom" \
+    --argjson harnesses "$harnesses" --argjson models "$models" \
+    '{harness:$harness, model:$model, command:$command, harnesses:$harnesses, models:$models}'
 }
 
 # ------------------------------------------------------------------ list/status
@@ -709,7 +774,8 @@ Commands:
   open <id>            launch the default agent in the repo, resuming its session
   files <id>           open the patch folder in the default file manager
   editor <id>          open the patch folder in the default editor
-  config [k] [v]       show or set config (config.json, e.g. ai = harness command)
+  config [k] [v]       show or set config (config.json)
+  settings             machine-readable settings for the panel (JSON)
   help                 this text
 USAGE
 }
@@ -731,6 +797,7 @@ main() {
     files)        cmd_open_files "$@" ;;
     editor)       cmd_open_editor "$@" ;;
     config)       cmd_config "$@" ;;
+    settings)     cmd_settings "$@" ;;
     help|-h|--help) usage ;;
     version|--version) echo "plugpatcher $VERSION" ;;
     *) die "unknown command '$cmd' (try: plugpatcher help)" ;;

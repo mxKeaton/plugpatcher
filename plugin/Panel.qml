@@ -37,6 +37,9 @@ Panel {
   property string feedback: ""        // result shown in the feedback box
   property bool feedbackError: false
   property bool cliAvailable: true
+  property bool settingsOpen: false
+  property bool pendingConfigChange: false
+  property var settings: ({ harness: "default", model: "", command: "", harnesses: [], models: [] })
 
   Component.onCompleted: cliCheck.running = true
 
@@ -95,6 +98,7 @@ Panel {
       feedback = "plugpatcher CLI not found at " + cli
       return
     }
+    pendingConfigChange = false
     busy = true
     feedback = ""
     feedbackError = false
@@ -112,6 +116,38 @@ Panel {
   }
 
   onOpenedChanged: if (opened) refresh()
+  onSettingsOpenChanged: if (settingsOpen) loadSettings()
+
+  function loadSettings() {
+    if (!cliAvailable) return
+    settingsProc.running = true
+  }
+
+  function parseSettings(raw) {
+    try { settings = JSON.parse(String(raw || "")) }
+    catch (e) { settings = { harness: "default", model: "", command: "", harnesses: [], models: [] } }
+  }
+
+  function setConfig(key, value) {
+    if (busy) return
+    pendingConfigChange = true
+    busy = true
+    feedback = ""
+    feedbackError = false
+    statusMessage = "saving " + key + "…"
+    actionProc.command = [cli, "config", key, String(value)]
+    actionProc.running = true
+  }
+
+  Process {
+    id: settingsProc
+    command: [root.cli, "settings"]
+    stdout: StdioCollector {
+      id: settingsOut
+      waitForEnd: true
+      onStreamFinished: root.parseSettings(settingsOut.text)
+    }
+  }
 
   Process {
     id: listProc
@@ -155,7 +191,12 @@ Panel {
           root.feedback = String(msg).replace(/^plugpatcher:\s*(error:\s*)?/, "")
           root.statusMessage = "failed"
         }
-        root.refresh()
+        if (root.pendingConfigChange) {
+          root.pendingConfigChange = false
+          root.loadSettings()
+        } else {
+          root.refresh()
+        }
       })
     }
   }
@@ -225,7 +266,7 @@ Panel {
         // ---------------------------------------------------------- header
         Item {
           width: parent.width
-          implicitHeight: Math.max(title.implicitHeight + subtitle.implicitHeight + Style.space(3), refreshButton.implicitHeight)
+          implicitHeight: Math.max(title.implicitHeight + subtitle.implicitHeight + Style.space(3), headerButtons.implicitHeight)
 
           Text {
             id: title
@@ -241,8 +282,10 @@ Panel {
           Text {
             id: subtitle
             textFormat: Text.PlainText
-            text: root.busy ? root.statusMessage
-                            : (root.plugins.length + " plugins · patch without losing updates")
+            text: root.settingsOpen
+                  ? "Configure how the AI button opens projects"
+                  : (root.busy ? root.statusMessage
+                               : (root.plugins.length + " plugins · patch without losing updates"))
             color: root.muted
             font.family: root.ff
             font.pixelSize: Style.font.caption
@@ -250,22 +293,41 @@ Panel {
             anchors.top: title.bottom
             anchors.topMargin: Style.space(3)
             elide: Text.ElideRight
-            width: parent.width - refreshButton.width - Style.space(8)
+            width: parent.width - headerButtons.width - Style.space(8)
           }
 
-          Button {
-            id: refreshButton
+          Row {
+            id: headerButtons
             anchors.right: parent.right
             anchors.verticalCenter: parent.verticalCenter
-            text: "Refresh"
-            foreground: root.fg
-            fontFamily: root.ff
-            fontSize: Style.font.bodySmall
-            bordered: true
-            enabled: !root.busy
-            horizontalPadding: Style.space(10)
-            verticalPadding: Style.space(4)
-            onClicked: root.refresh()
+            spacing: Style.space(6)
+
+            Button {
+              id: settingsButton
+              text: "\uf013"
+              foreground: root.settingsOpen ? Color.accent : root.fg
+              fontFamily: root.ff
+              fontSize: Style.font.body
+              bordered: true
+              enabled: !root.busy
+              horizontalPadding: Style.space(8)
+              verticalPadding: Style.space(4)
+              tooltipText: "Settings"
+              onClicked: root.settingsOpen = !root.settingsOpen
+            }
+
+            Button {
+              id: refreshButton
+              text: "Refresh"
+              foreground: root.fg
+              fontFamily: root.ff
+              fontSize: Style.font.bodySmall
+              bordered: true
+              enabled: !root.busy
+              horizontalPadding: Style.space(10)
+              verticalPadding: Style.space(4)
+              onClicked: root.refresh()
+            }
           }
         }
 
@@ -273,6 +335,7 @@ Panel {
 
         // ---------------------------------------------------------- sort
         Row {
+          visible: !root.settingsOpen
           spacing: Style.space(6)
 
           Text {
@@ -303,7 +366,7 @@ Panel {
         // ---------------------------------------------------------- feedback
         Rectangle {
           id: feedbackBox
-          visible: root.feedback !== ""
+          visible: !root.settingsOpen && root.feedback !== ""
           width: parent.width
           implicitHeight: feedbackColumn.implicitHeight + Style.space(16)
           radius: Style.cornerRadius
@@ -337,8 +400,50 @@ Panel {
           }
         }
 
+        // ---------------------------------------------------------- settings
+        Column {
+          visible: root.settingsOpen
+          width: parent.width
+          spacing: Style.space(14)
+
+          Dropdown {
+            width: parent.width
+            label: "AI harness"
+            value: root.settings.harness || "default"
+            options: root.settings.harnesses || []
+            foreground: root.fg
+            fontFamily: root.ff
+            enabled: !root.busy
+            onChanged: function(v) { root.setConfig("harness", v) }
+          }
+
+          Dropdown {
+            width: parent.width
+            label: "Model"
+            value: root.settings.model || ""
+            options: root.settings.models || []
+            foreground: root.fg
+            fontFamily: root.ff
+            enabled: !root.busy
+            onChanged: function(v) { root.setConfig("model", v) }
+          }
+
+          Text {
+            textFormat: Text.PlainText
+            width: parent.width
+            wrapMode: Text.WordWrap
+            color: root.muted
+            font.family: root.ff
+            font.pixelSize: Style.font.caption
+            text: root.settings.harness === "custom"
+                  ? "Custom command: set with  plugpatcher config command \"<cmd>\"   ({dir} = repo path)"
+                  : "What the AI button opens, inside each plugin's repo."
+          }
+        }
+
         // ---------------------------------------------------------- list
         Flickable {
+          visible: !root.settingsOpen
           width: parent.width
           height: Math.min(pluginColumn.implicitHeight, Style.space(470))
           contentWidth: width
