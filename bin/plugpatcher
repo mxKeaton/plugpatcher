@@ -68,6 +68,13 @@ log_file()   { printf '%s/%s.log' "$STATE_DIR" "$1"; }
 
 is_setup() { [[ -f "$(meta_file "$1")" ]]; }
 
+# Print the per-project repo path, or fail with a clear, actionable message.
+require_repo() {
+  local repo; repo="$(repo_dir "$1")"
+  [[ -d "$repo" ]] || die "patch folder not found: $repo (re-run: plugpatcher setup $1)"
+  printf '%s' "$repo"
+}
+
 edit_id_of() { # read from metadata
   jq -r '.editId' "$(meta_file "$1")"
 }
@@ -318,7 +325,7 @@ cmd_sync() {
 
   local mf repo branch ub upstream first_party
   mf="$(meta_file "$id")"
-  repo="$(repo_dir "$id")"
+  repo="$(require_repo "$id")"
   branch="$(jq -r '.branch' "$mf")"
   ub="$(jq -r '.upstreamBranch' "$mf")"
   upstream="$(jq -r '.upstream' "$mf")"
@@ -443,7 +450,7 @@ cmd_pr() {
   need git; need jq
   local mf repo branch ub upstream slug
   mf="$(meta_file "$id")"
-  repo="$(repo_dir "$id")"
+  repo="$(require_repo "$id")"
   branch="$(jq -r '.branch' "$mf")"
   ub="$(jq -r '.upstreamBranch' "$mf")"
   upstream="$(jq -r '.upstream' "$mf")"
@@ -484,14 +491,15 @@ cmd_pr() {
 cmd_open() {
   local id="${1:-}"
   [[ -n "$id" ]] || die "usage: plugpatcher open <plugin-id>"
-  is_setup "$id" || die "'$id' is not set up"
-  local repo; repo="$(repo_dir "$id")"
+  is_setup "$id" || die "'$id' is not set up for editing (run: plugpatcher setup $id)"
+  local repo; repo="$(require_repo "$id")"
 
+  command -v omarchy-default-agent >/dev/null 2>&1 || die "omarchy-default-agent is not available"
   local agent; agent="$(omarchy-default-agent 2>/dev/null || true)"
   if [[ -z "$agent" ]]; then
-    die "no default agent set; choose one with: omarchy default agent <name>"
+    die "no default agent is set (choose one with: omarchy default agent <name>)"
   fi
-  command -v "$agent" >/dev/null 2>&1 || die "default agent '$agent' is not installed"
+  command -v "$agent" >/dev/null 2>&1 || die "default agent '$agent' is set but not installed"
 
   local -a cmd
   case "$agent" in
@@ -514,15 +522,16 @@ cmd_open() {
 cmd_open_files() {
   local id="${1:-}"
   [[ -n "$id" ]] || die "usage: plugpatcher files <plugin-id>"
-  is_setup "$id" || die "'$id' is not set up"
-  local repo; repo="$(repo_dir "$id")"
-  log "opening patch folder: $repo"
+  is_setup "$id" || die "'$id' is not set up for editing (run: plugpatcher setup $id)"
+  local repo; repo="$(require_repo "$id")"
   if command -v xdg-open >/dev/null 2>&1; then
+    log "opening patch folder: $repo"
     setsid uwsm-app -- xdg-open "$repo" >/dev/null 2>&1 &
   elif command -v nautilus >/dev/null 2>&1; then
+    log "opening patch folder: $repo"
     setsid uwsm-app -- nautilus "$repo" >/dev/null 2>&1 &
   else
-    die "no file manager found"
+    die "no file manager found (install xdg-utils or a file manager)"
   fi
 }
 
@@ -530,9 +539,18 @@ cmd_open_files() {
 cmd_open_editor() {
   local id="${1:-}"
   [[ -n "$id" ]] || die "usage: plugpatcher editor <plugin-id>"
-  is_setup "$id" || die "'$id' is not set up"
-  local repo; repo="$(repo_dir "$id")"
-  log "opening editor in: $repo"
+  is_setup "$id" || die "'$id' is not set up for editing (run: plugpatcher setup $id)"
+  local repo; repo="$(require_repo "$id")"
+
+  command -v omarchy-launch-editor >/dev/null 2>&1 || die "omarchy-launch-editor is not available"
+
+  local editor_file="$HOME/.local/state/omarchy/defaults/editor" editor=""
+  [[ -f "$editor_file" ]] && read -r editor < "$editor_file"
+  [[ -n "$editor" ]] || editor="nvim"
+  command -v "${editor##*/}" >/dev/null 2>&1 || \
+    die "default editor '$editor' is not installed (set one with: omarchy default editor <name>)"
+
+  log "opening $editor in: $repo"
   setsid omarchy-launch-editor "$repo" >/dev/null 2>&1 &
 }
 

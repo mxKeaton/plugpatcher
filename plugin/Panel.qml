@@ -32,6 +32,20 @@ Panel {
   property string statusMessage: ""
   property string pendingRevert: ""   // plugin id awaiting revert confirmation
   property string sortBy: "name"       // name | edits | updates | id
+  property string lastStdout: ""
+  property string lastStderr: ""
+  property string feedback: ""        // result shown in the feedback box
+  property bool feedbackError: false
+  property bool cliAvailable: true
+
+  Component.onCompleted: cliCheck.running = true
+
+  // The CLI lives outside the plugin, so make sure it exists before actions.
+  Process {
+    id: cliCheck
+    command: ["bash", "-c", "test -x \"$1\"", "bash", root.cli]
+    onExited: function(code) { root.cliAvailable = code === 0 }
+  }
 
   function cmpPlugins(a, b) {
     var key = sortBy
@@ -76,7 +90,16 @@ Panel {
 
   function runAction(args) {
     if (busy) return
+    if (!cliAvailable) {
+      feedbackError = true
+      feedback = "plugpatcher CLI not found at " + cli
+      return
+    }
     busy = true
+    feedback = ""
+    feedbackError = false
+    lastStdout = ""
+    lastStderr = ""
     statusMessage = args.join(" ") + " …"
     actionProc.command = [cli].concat(args)
     actionProc.running = true
@@ -112,12 +135,27 @@ Panel {
 
   Process {
     id: actionProc
-    stdout: StdioCollector { id: actionOut; waitForEnd: true }
-    stderr: StdioCollector { id: actionErr; waitForEnd: true }
+    stdout: StdioCollector { id: actionOut; waitForEnd: true; onStreamFinished: root.lastStdout = actionOut.text }
+    stderr: StdioCollector { id: actionErr; waitForEnd: true; onStreamFinished: root.lastStderr = actionErr.text }
     onExited: function(code) {
-      root.busy = false
-      root.statusMessage = code === 0 ? "done" : ("failed (exit " + code + ")")
-      root.refresh()
+      // Let the stream collectors finish before reading their text.
+      Qt.callLater(function() {
+        root.busy = false
+        var out = String(root.lastStdout || "").trim()
+        var err = String(root.lastStderr || "").trim()
+        if (code === 0) {
+          root.feedbackError = false
+          root.feedback = out !== "" ? out : "done"
+          root.statusMessage = "done"
+        } else {
+          root.feedbackError = true
+          var lines = err.split("\n").filter(function(l) { return l.trim() !== "" })
+          var msg = lines.length > 0 ? lines[lines.length - 1] : ("failed (exit " + code + ")")
+          root.feedback = String(msg).replace(/^plugpatcher:\s*(error:\s*)?/, "")
+          root.statusMessage = "failed"
+        }
+        root.refresh()
+      })
     }
   }
 
@@ -257,6 +295,43 @@ Panel {
               text: modelData.label
               selected: root.sortBy === modelData.key
               onClicked: root.sortBy = modelData.key
+            }
+          }
+        }
+
+        // ---------------------------------------------------------- feedback
+        Rectangle {
+          id: feedbackBox
+          visible: root.feedback !== ""
+          width: parent.width
+          implicitHeight: feedbackColumn.implicitHeight + Style.space(16)
+          radius: Style.cornerRadius
+          color: root.feedbackError ? Util.alpha(root.danger, 0.14) : Util.alpha(Color.accent, 0.12)
+          border.width: 1
+          border.color: root.feedbackError ? Util.alpha(root.danger, 0.55) : Util.alpha(Color.accent, 0.4)
+
+          Column {
+            id: feedbackColumn
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.verticalCenter: parent.verticalCenter
+            anchors.leftMargin: Style.space(12)
+            anchors.rightMargin: Style.space(12)
+            spacing: Style.space(6)
+
+            Text {
+              textFormat: Text.PlainText
+              text: (root.feedbackError ? "\uf071  " : "\uf00c  ") + root.feedback
+              color: root.feedbackError ? root.danger : root.fg
+              font.family: root.ff
+              font.pixelSize: Style.font.bodySmall
+              wrapMode: Text.WordWrap
+              width: parent.width
+            }
+
+            ActionButton {
+              text: "Dismiss"
+              onClicked: root.feedback = ""
             }
           }
         }
