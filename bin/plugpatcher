@@ -133,16 +133,18 @@ set_bar() { # target bar plugin id
   config="${XDG_CONFIG_HOME:-$HOME/.config}/omarchy/shell.json"
   current="$(jq -r '.bar.id // empty' "$config" 2>/dev/null || true)"
   [[ "$current" == "$target" ]] && return 0
-  omarchy bar use "$target" >/dev/null 2>&1 || true
-  # Restart the shell so the bar host rebuilds. It must be a transient user
-  # unit: a child of this process (even setsid) lives in the shell's unit and is
-  # killed when the shell reloads, so the restart would never run.
+
+  # Schedule the restart FIRST. `omarchy bar use` reloads plugins, which can
+  # kill this process before it reaches any later line. Run the restart as a
+  # transient user unit so it also survives the shell's own reload.
   if command -v systemd-run >/dev/null 2>&1; then
     systemd-run --user --collect --quiet --unit="plugpatcher-restart-$RANDOM" \
-      bash -c 'sleep 0.5; omarchy restart shell' >/dev/null 2>&1 || true
+      bash -c 'sleep 0.8; omarchy restart shell' >/dev/null 2>&1 || true
   else
-    setsid bash -c 'sleep 0.5; omarchy restart shell' >/dev/null 2>&1 &
+    setsid bash -c 'sleep 0.8; omarchy restart shell' >/dev/null 2>&1 &
   fi
+
+  omarchy bar use "$target" >/dev/null 2>&1 || true
 }
 
 ensure_active() { # source-id
