@@ -708,9 +708,29 @@ write_catalog() {
                branch: (if $branch == "" then null else $branch end),
                lastEdit: $lastEdit, lastUpdate: $lastUpdate}]')"
     done < <(omarchy-plugin-catalog 2>/dev/null | jq -c '.[]' 2>/dev/null)
+
+    # PlugPatcher metadata whose original plugin is no longer installed: the
+    # clone may still be loaded but there is no source to update from. Surface
+    # it so the GUI can show and clean it up.
+    local known sid sname sedit mfile
+    known="$(jq -r '.[].id' <<<"$entries" 2>/dev/null || true)"
+    while IFS= read -r mfile; do
+      [[ -n "$mfile" ]] || continue
+      sid="$(jq -r '.sourceId // empty' "$mfile" 2>/dev/null || true)"
+      [[ -n "$sid" ]] || continue
+      grep -qxF "$sid" <<<"$known" && continue
+      sname="$(jq -r '.name // .sourceId' "$mfile" 2>/dev/null || echo "$sid")"
+      sedit="$(jq -r '.editId // empty' "$mfile" 2>/dev/null || true)"
+      entries="$(jq -n --argjson e "$entries" --arg id "$sid" --arg name "$sname" --arg editId "$sedit" '
+        $e + [{id:$id, name:$name, kinds:[], state:"orphaned",
+               editId: (if $editId == "" then null else $editId end),
+               upstream:null, branch:null, lastEdit:null, lastUpdate:null}]')"
+    done < <(find "$DATA_DIR" -mindepth 1 -maxdepth 1 -name '*.json' ! -name 'catalog.json' -print 2>/dev/null)
+
     entries="$(jq -n --argjson e "$entries" --arg enabled "$enabled" '
       $e | map(. as $p
-        | (($enabled | split("\n") | map(select(length>0) | split("\t")) | map(select(.[0]==$p.id)) | .[0]) // []) as $s
+        | ($p.editId // $p.id) as $look
+        | (($enabled | split("\n") | map(select(length>0) | split("\t")) | map(select(.[0]==$look)) | .[0]) // []) as $s
         | $p + {enabled: (($s[1] // "false") == "true"), active: (($s[2] // "false") == "true")})
     ' 2>/dev/null || printf '%s' "$entries")"
   fi

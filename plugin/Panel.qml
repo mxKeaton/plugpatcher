@@ -618,8 +618,8 @@ Panel {
                         id: badge
                         anchors.right: parent.right
                         anchors.verticalCenter: parent.verticalCenter
-                        label: modelData.state === "editing" ? "patched" : "original"
-                        textColor: modelData.state === "editing" ? Color.accent : root.muted
+                        label: modelData.state === "editing" ? "patched" : (modelData.state === "orphaned" ? "orphaned" : "original")
+                        textColor: modelData.state === "editing" ? Color.accent : (modelData.state === "orphaned" ? root.danger : root.muted)
                       }
                     }
 
@@ -627,7 +627,9 @@ Panel {
                       textFormat: Text.PlainText
                       text: modelData.state === "editing"
                             ? (modelData.id + "  →  " + modelData.editId)
-                            : modelData.id
+                            : (modelData.state === "orphaned"
+                               ? (modelData.id + "  →  " + modelData.editId + "   (original removed)")
+                               : modelData.id)
                       color: root.muted
                       font.family: root.ff
                       font.pixelSize: Style.font.caption
@@ -651,26 +653,26 @@ Panel {
                       spacing: Style.space(6)
 
                       ActionButton {
-                        visible: modelData.state !== "editing"
+                        visible: modelData.state === "original"
                         text: "Patch"
                         foreground: Color.accent
                         onClicked: root.runAction(["setup", modelData.id])
                       }
 
                       ActionButton {
-                        visible: modelData.state === "editing"
+                        visible: modelData.state === "editing" || modelData.state === "orphaned"
                         text: "AI"
                         onClicked: root.runAction(["open", modelData.id])
                       }
 
                       ActionButton {
-                        visible: modelData.state === "editing"
+                        visible: modelData.state === "editing" || modelData.state === "orphaned"
                         text: "Editor"
                         onClicked: root.runAction(["editor", modelData.id])
                       }
 
                       ActionButton {
-                        visible: modelData.state === "editing"
+                        visible: modelData.state === "editing" || modelData.state === "orphaned"
                         text: "Browse"
                         onClicked: root.runAction(["files", modelData.id])
                       }
@@ -688,7 +690,7 @@ Panel {
                       }
 
                       ActionButton {
-                        visible: modelData.state === "editing" && root.pendingRevert !== modelData.id
+                        visible: (modelData.state === "editing" || modelData.state === "orphaned") && root.pendingRevert !== modelData.id
                         text: "Revert"
                         foreground: root.danger
                         onClicked: root.pendingRevert = modelData.id
