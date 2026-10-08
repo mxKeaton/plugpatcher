@@ -492,30 +492,38 @@ cmd_pr() {
 # Read a config value from ~/.config/plugpatcher/config.json.
 cfg_get() { jq -r --arg k "$1" '.[$k] // empty' "$CONFIG_FILE" 2>/dev/null || true; }
 
-# Interactive launch args for an Omarchy agent, one per line.
-agent_command() { # agent model
-  local agent="$1" model="$2"
-  local -a cmd
-  case "$agent" in
-    pi)           cmd=(pi --continue) ;;
-    claude)       cmd=(claude --permission-mode auto --continue) ;;
-    opencode)     cmd=(opencode --auto --continue) ;;
-    codex)        cmd=(codex --approve-for-me resume --last) ;;
-    gemini)       cmd=(gemini --yolo --resume) ;;
-    crush)        cmd=(crush --yolo) ;;
-    omp)          cmd=(omp --auto-approve) ;;
-    grok)         cmd=(grok --permission-mode bypassPermissions) ;;
-    copilot)      cmd=(copilot --allow-all) ;;
-    cursor-agent) cmd=(cursor-agent --yolo --trust agent) ;;
-    hermes)       cmd=(hermes --yolo) ;;
-    muse)         cmd=(muse --approval-mode never) ;;
-    openclaw)     cmd=(omarchy-launch-openclaw --tui) ;;
-    *)            warn "no known launch flags for '$agent'; launching it directly"; cmd=("$agent") ;;
+# Which harness to use when none is configured (or the configured one is gone).
+default_harness() {
+  if command -v herdr >/dev/null 2>&1; then echo herdr
+  elif command -v tmux >/dev/null 2>&1; then echo tmux
+  else echo terminal; fi
+}
+
+resolve_harness() {
+  local h; h="$(cfg_get harness)"
+  case "$h" in
+    herdr) command -v herdr >/dev/null 2>&1 && echo herdr || default_harness ;;
+    tmux)  command -v tmux  >/dev/null 2>&1 && echo tmux  || default_harness ;;
+    terminal|custom) echo "$h" ;;
+    *) default_harness ;;
   esac
-  if [[ -n "$model" && "$agent" != "openclaw" ]]; then
-    cmd+=(--model "$model")
-  fi
-  printf '%s\n' "${cmd[@]}"
+}
+
+# Map an Omarchy agent name to a herdr --kind value (empty when unsupported).
+herdr_kind() {
+  case "$1" in
+    pi) echo pi ;;
+    claude) echo claude ;;
+    codex) echo codex ;;
+    gemini) echo gemini ;;
+    cursor-agent|cursor) echo cursor ;;
+    omp) echo omp ;;
+    opencode) echo opencode ;;
+    copilot) echo copilot ;;
+    grok) echo grok ;;
+    hermes) echo hermes ;;
+    *) echo "" ;;
+  esac
 }
 
 cmd_open() {
@@ -524,9 +532,8 @@ cmd_open() {
   is_setup "$id" || die "'$id' is not set up for editing (run: plugpatcher setup $id)"
   local repo; repo="$(require_repo "$id")"
 
-  local harness model custom
-  harness="$(cfg_get harness)"; model="$(cfg_get model)"; custom="$(cfg_get command)"
-  [[ -z "$harness" ]] && harness="default"
+  local harness; harness="$(resolve_harness)"
+  local custom; custom="$(cfg_get command)"
 
   case "$harness" in
     custom)
@@ -534,38 +541,33 @@ cmd_open() {
       custom="${custom//\{dir\}/$repo}"
       log "opening custom command: $custom"
       ( cd "$repo" && setsid bash -lc "$custom" >/dev/null 2>&1 & )
-      return 0 ;;
-    herdr)
-      command -v herdr >/dev/null 2>&1 || die "herdr is set as the AI harness but is not installed"
-      if herdr status server --json 2>/dev/null | jq -e '.running == true' >/dev/null 2>&1; then
-        log "opening a Herdr workspace at: $repo"
-        setsid herdr workspace create --cwd "$repo" --label "$id" --focus >/dev/null 2>&1 &
-      else
-        log "starting Herdr for: $repo"
-        ( cd "$repo" && setsid bash -lc "omarchy launch terminal herdr" >/dev/null 2>&1 & )
-      fi
-      return 0 ;;
+      ;;
     tmux)
       command -v tmux >/dev/null 2>&1 || die "tmux is set as the AI harness but is not installed"
-      log "opening harness: tmux"
-      ( cd "$repo" && setsid bash -lc "omarchy launch terminal tmux" >/dev/null 2>&1 & )
-      return 0 ;;
+      log "opening tmux at: $repo"
+      setsid bash -lc "omarchy launch terminal tmux" >/dev/null 2>&1 &
+      ;;
+    terminal)
+      log "opening a terminal at: $repo"
+      setsid uwsm-app -- xdg-terminal-exec --dir="$repo" >/dev/null 2>&1 &
+      ;;
+    *)
+      command -v herdr >/dev/null 2>&1 || die "herdr is set as the AI harness but is not installed"
+      if herdr status server --json 2>/dev/null | jq -e '.running == true' >/dev/null 2>&1; then
+        local created pane agent kind
+        created="$(herdr workspace create --cwd "$repo" --label "$id" --focus 2>/dev/null || true)"
+        pane="$(jq -r '.result.root_pane.pane_id // empty' <<<"$created" 2>/dev/null || true)"
+        agent="$(omarchy-default-agent 2>/dev/null || true)"
+        kind="$(herdr_kind "$agent")"
+        if [[ -n "$pane" && -n "$kind" ]]; then
+          log "starting $agent in the Herdr workspace"
+          setsid herdr agent start "$agent" --kind "$kind" --pane "$pane" >/dev/null 2>&1 &
+        fi
+      fi
+      log "opening Herdr at: $repo"
+      setsid bash -lc "omarchy launch terminal herdr" >/dev/null 2>&1 &
+      ;;
   esac
-
-  local agent
-  if [[ "$harness" == "default" ]]; then
-    command -v omarchy-default-agent >/dev/null 2>&1 || die "omarchy-default-agent is not available"
-    agent="$(omarchy-default-agent 2>/dev/null || true)"
-    [[ -n "$agent" ]] || die "no default agent is set (choose one with: omarchy default agent <name>)"
-  else
-    agent="$harness"
-  fi
-  command -v "$agent" >/dev/null 2>&1 || die "'$agent' is set as the AI harness but is not installed"
-
-  local -a cmd; mapfile -t cmd < <(agent_command "$agent" "$model")
-  log "opening $agent in $repo"
-  cd "$repo"
-  exec omarchy-launch-tui --app-id=org.omarchy.agent "${cmd[@]}"
 }
 
 # Open the per-project patch folder in the default file manager.
@@ -621,34 +623,17 @@ cmd_config() {
 
 # Machine-readable settings for the panel: installed harnesses + models.
 cmd_settings() {
-  local harness model custom
-  harness="$(cfg_get harness)"; model="$(cfg_get model)"; custom="$(cfg_get command)"
-  [[ -z "$harness" ]] && harness="default"
+  local harness custom
+  harness="$(resolve_harness)"; custom="$(cfg_get command)"
 
-  local harnesses='[]' a
-  harnesses="$(jq -cn --argjson h "$harnesses" '$h + [{value:"default",label:"System default agent"}]')"
-  for a in pi omp opencode claude codex grok gemini openclaw hermes copilot crush cursor-agent muse; do
-    command -v "$a" >/dev/null 2>&1 || continue
-    harnesses="$(jq -cn --arg a "$a" --argjson h "$harnesses" '$h + [{value:$a,label:$a}]')"
-  done
+  local harnesses='[]'
   command -v herdr >/dev/null 2>&1 && harnesses="$(jq -cn --argjson h "$harnesses" '$h + [{value:"herdr",label:"Herdr"}]')"
   command -v tmux >/dev/null 2>&1 && harnesses="$(jq -cn --argjson h "$harnesses" '$h + [{value:"tmux",label:"tmux"}]')"
+  harnesses="$(jq -cn --argjson h "$harnesses" '$h + [{value:"terminal",label:"Terminal"}]')"
   harnesses="$(jq -cn --argjson h "$harnesses" '$h + [{value:"custom",label:"Custom command\u2026"}]')"
 
-  local models='[{"value":"","label":"Default model"}]'
-  if [[ "$harness" == "pi" || "$harness" == "default" ]]; then
-    local store="$HOME/.pi/agent/models-store.json"
-    if [[ -f "$store" ]]; then
-      while IFS=$'\t' read -r mid mlabel; do
-        [[ -n "$mid" ]] || continue
-        models="$(jq -cn --arg v "$mid" --arg l "$mlabel" --argjson m "$models" '$m + [{value:$v,label:$l}]')"
-      done < <(jq -r 'to_entries[] as $p | $p.value.models[] | "\($p.key)/\(.id)\t\(.name) (\($p.key))"' "$store" 2>/dev/null)
-    fi
-  fi
-
-  jq -n --arg harness "$harness" --arg model "$model" --arg command "$custom" \
-    --argjson harnesses "$harnesses" --argjson models "$models" \
-    '{harness:$harness, model:$model, command:$command, harnesses:$harnesses, models:$models}'
+  jq -n --arg harness "$harness" --arg command "$custom" --argjson harnesses "$harnesses" \
+    '{harness:$harness, command:$command, harnesses:$harnesses}'
 }
 
 # ------------------------------------------------------------------ list/status

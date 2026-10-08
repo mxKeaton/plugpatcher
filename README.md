@@ -48,10 +48,9 @@ plugpatcher remove <plugin-id>       # stop editing; restore the original
 
 The panel's gear opens settings for how the **AI** button opens projects:
 
-- **AI harness** — Omarchy's default agent, a specific installed agent, `herdr`
-  / `tmux` if installed, or a custom command. The list only shows what's
-  installed on the machine.
-- **Model** — passed to the agent (`--model`) where supported.
+- **AI harness** — `Herdr` (opens a workspace at the repo and starts your
+  default agent in it), `tmux`, `Terminal`, or a custom command. Only what's
+  installed is listed.
 
 Stored in `~/.config/plugpatcher/config.json`, also settable with
 `plugpatcher config <key> <value>`. `plugpatcher settings` prints the available

@@ -437,21 +437,6 @@ Panel {
             onClicked: root.picking = "harness"
           }
 
-          Button {
-            visible: (root.settings.models || []).length > 1
-            width: parent.width
-            leftAlign: true
-            text: "Model:  " + root.labelFor(root.settings.models, root.settings.model)
-            foreground: root.fg
-            fontFamily: root.ff
-            fontSize: Style.font.body
-            bordered: true
-            enabled: !root.busy
-            horizontalPadding: Style.space(10)
-            verticalPadding: Style.space(6)
-            onClicked: root.picking = "model"
-          }
-
           Text {
             textFormat: Text.PlainText
             width: parent.width
@@ -461,7 +446,7 @@ Panel {
             font.pixelSize: Style.font.caption
             text: root.settings.harness === "custom"
                   ? "Custom command: set with  plugpatcher config command \"<cmd>\"   ({dir} = repo path)"
-                  : "What the AI button opens, inside each plugin's repo."
+                  : "What the AI button opens, inside each plugin's repo. The default agent runs inside Herdr."
           }
         }
 
@@ -486,7 +471,7 @@ Panel {
             }
 
             Text {
-              text: root.picking === "harness" ? "Choose AI harness" : "Choose model"
+              text: "Choose harness"
               color: root.fg
               font.family: root.ff
               font.pixelSize: Style.font.body
@@ -509,14 +494,14 @@ Panel {
               spacing: Style.space(4)
 
               Repeater {
-                model: root.picking === "harness" ? (root.settings.harnesses || []) : (root.settings.models || [])
+                model: root.settings.harnesses || []
 
                 Button {
                   required property var modelData
                   width: pickColumn.width
                   leftAlign: true
                   text: modelData.label
-                  selected: String(modelData.value) === String(root.picking === "harness" ? root.settings.harness : root.settings.model)
+                  selected: String(modelData.value) === String(root.settings.harness)
                   foreground: root.fg
                   fontFamily: root.ff
                   fontSize: Style.font.body

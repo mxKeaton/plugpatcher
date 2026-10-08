@@ -56,10 +56,9 @@ The clone carries `omarchy.clonedFrom = <id>`, so the shell:
 Managed from the panel's gear button, or with `plugpatcher config <key> <value>`.
 `~/.config/plugpatcher/config.json`:
 
-- `harness` — what the AI button opens. `default` uses Omarchy's default agent;
-  an agent id (`pi`, `claude`, `codex`, `opencode`, …) launches that agent;
-  `herdr` / `tmux` open that session; `custom` runs `command`.
-- `model` — optional model passed to the agent (`--model`) where supported.
+- `harness` — what the AI button opens: `herdr`, `tmux`, `terminal`, or `custom`.
+  `herdr` opens a Herdr workspace at the repo and starts Omarchy's default agent
+  in it; `tmux` / `terminal` open a session at the repo; `custom` runs `command`.
 - `command` — used when `harness` is `custom`; `{dir}` expands to the repo path.
 
 `plugpatcher settings` prints the installed harnesses and available models as
