@@ -128,22 +128,27 @@ rescan() { omarchy-shell -q shell rescanPlugins >/dev/null 2>&1 || true; }
 # Flipping .bar.id does not reliably rebuild the bar host (which can leave no
 # bar on screen), so restart the shell; detached, so the reload killing this
 # process cannot abort it.
-set_bar() { # target bar plugin id
-  local target="$1" config current
-  config="${XDG_CONFIG_HOME:-$HOME/.config}/omarchy/shell.json"
-  current="$(jq -r '.bar.id // empty' "$config" 2>/dev/null || true)"
-  [[ "$current" == "$target" ]] && return 0
-
-  # Schedule the restart FIRST. `omarchy bar use` reloads plugins, which can
-  # kill this process before it reaches any later line. Run the restart as a
-  # transient user unit so it also survives the shell's own reload.
+# Restart the shell, detached as a transient user unit (a child of this process
+# would be killed by the shell's own reload). Used to make a regenerated clone
+# actually rebuild in the bar/panel.
+schedule_shell_restart() {
   if command -v systemd-run >/dev/null 2>&1; then
     systemd-run --user --collect --quiet --unit="plugpatcher-restart-$RANDOM" \
       bash -c 'sleep 0.8; omarchy restart shell' >/dev/null 2>&1 || true
   else
     setsid bash -c 'sleep 0.8; omarchy restart shell' >/dev/null 2>&1 &
   fi
+}
 
+set_bar() { # target bar plugin id
+  local target="$1" config current
+  config="${XDG_CONFIG_HOME:-$HOME/.config}/omarchy/shell.json"
+  current="$(jq -r '.bar.id // empty' "$config" 2>/dev/null || true)"
+  [[ "$current" == "$target" ]] && return 0
+
+  # Schedule the restart FIRST: `omarchy bar use` reloads plugins and can kill
+  # this process before it reaches any later line.
+  schedule_shell_restart
   omarchy bar use "$target" >/dev/null 2>&1 || true
 }
 
@@ -401,6 +406,9 @@ cmd_sync() {
 
   generate_clone "$id"
   touch_last_sync "$id"
+  # A regenerated clone does not always rebuild the live widget/panel from a
+  # rescan, so restart the shell to make the change visible.
+  schedule_shell_restart
   # Re-assert the clone is the loaded plugin (the original may have been
   # reinstalled while it was patched).
   ensure_active "$id"

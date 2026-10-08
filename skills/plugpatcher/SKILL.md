@@ -75,10 +75,10 @@ JSON (the panel uses it for its dropdowns).
 2. **To edit**: make changes **in the repo**, not in the loaded clone
    (`plugins/local.<seg>/`). The repo is the source of truth and what `pr` and
    `sync` operate on.
-3. **After editing**: run `plugpatcher sync <id>` (or regenerate with
-   `setup`-time generation) so the loaded clone reflects the repo, then the
-   shell reloads. If a change only needs regenerating without an upstream
-   fetch, re-run the generation by calling `sync` (it is idempotent).
+3. **After editing**: run `plugpatcher sync <id>` so the loaded clone reflects
+   the repo. `sync` regenerates the clone and **restarts the shell** (a plain
+   rescan does not reliably rebuild a live widget/panel), so the change becomes
+   visible. It is idempotent.
 4. **To pull upstream**: `plugpatcher sync <id>`. If upstream changed the same
    lines, `sync` aborts, changes nothing, and notifies; resolve the rebase in
    the repo, then run `sync` again.
