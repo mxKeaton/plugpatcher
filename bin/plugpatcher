@@ -112,6 +112,29 @@ upstream_url_of() {
   git -C "$d" remote get-url origin 2>/dev/null
 }
 
+# Best-known source URL for any installed plugin: the PlugPatcher upstream when
+# it is adopted, else the plugin's own git origin, else a homepage/repository
+# field in its manifest.
+source_url_of() { # id
+  local id="$1" mf d mp url
+  mf="$(meta_file "$id")"
+  if [[ -f "$mf" ]]; then
+    url="$(jq -r '.upstream // empty' "$mf" 2>/dev/null || true)"
+    [[ -n "$url" ]] && { printf '%s' "$url"; return 0; }
+  fi
+  d="$(plugin_dir "$id")"
+  if [[ -d "$d/.git" ]]; then
+    url="$(git -C "$d" remote get-url origin 2>/dev/null || true)"
+    [[ -n "$url" ]] && { printf '%s' "$url"; return 0; }
+  fi
+  mp="$(manifest_path "$id" 2>/dev/null || true)"
+  if [[ -n "$mp" && -f "$mp" ]]; then
+    url="$(jq -r '.homepage // .repository // empty' "$mp" 2>/dev/null || true)"
+    [[ -n "$url" ]] && { printf '%s' "$url"; return 0; }
+  fi
+  return 1
+}
+
 repo_default_branch() { # repo -> upstream branch name
   local repo="$1"
   git -C "$repo" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null | sed 's#^origin/##' && return 0
@@ -1102,11 +1125,9 @@ cmd_pr_cancel() {
 cmd_source() {
   local id="${1:-}"
   [[ -n "$id" ]] || die "usage: plugpatcher source <plugin-id>"
-  is_setup "$id" || die "'$id' is not set up"
-  local upstream; upstream="$(jq -r '.upstream // empty' "$(meta_file "$id")")"
-  [[ -n "$upstream" ]] || die "no upstream recorded for '$id'"
-  log "opening $upstream"
-  open_url "$upstream"
+  local src; src="$(source_url_of "$id")" || die "no source URL known for '$id'"
+  log "opening $src"
+  open_url "$src"
 }
 
 # Open an arbitrary URL in the browser (used for the PR link).
@@ -1304,6 +1325,7 @@ write_catalog() {
       name="$(jq -r '.name // .id' <<<"$line")"
       kinds="$(jq -c '.kinds // []' <<<"$line")"
       mf="$(meta_file "$id")"
+      local src_url=""
       if [[ -f "$mf" ]]; then
         state="editing"
         edit_id="$(jq -r '.editId' "$mf")"
@@ -1311,6 +1333,7 @@ write_catalog() {
         branch="$(jq -r '.branch' "$mf")"
         ub="$(jq -r '.upstreamBranch' "$mf")"
         repo_path="$(repo_dir "$id")"
+        src_url="$upstream"
         # Last local-only commit = the most recent patch edit.
         last_edit="$(git -C "$repo_path" log -1 --format=%ct "origin/$ub..$branch" 2>/dev/null || true)"
         [[ -n "$last_edit" ]] || last_edit="$(git -C "$repo_path" log -1 --format=%ct "$branch" 2>/dev/null || true)"
@@ -1319,14 +1342,22 @@ write_catalog() {
       else
         state="original"; edit_id=""; upstream=""; branch=""
         last_edit=""; last_update=""
+        # A source URL so untouched plugins can show a Source button too.
+        local pdir; pdir="$(plugin_dir "$id")"
+        [[ -d "$pdir/.git" ]] && src_url="$(git -C "$pdir" remote get-url origin 2>/dev/null || true)"
+        if [[ -z "$src_url" && -n "$manifest_path" && -f "$manifest_path" ]]; then
+          src_url="$(jq -r '.homepage // .repository // empty' "$manifest_path" 2>/dev/null || true)"
+        fi
       fi
       entries="$(jq -n --argjson e "$entries" \
         --arg id "$id" --arg name "$name" --argjson kinds "$kinds" \
         --arg state "$state" --arg editId "$edit_id" --arg upstream "$upstream" --arg branch "$branch" \
+        --arg source "$src_url" \
         --argjson lastEdit "${last_edit:-null}" --argjson lastUpdate "${last_update:-null}" '
         $e + [{id:$id, name:$name, kinds:$kinds, state:$state,
                editId: (if $editId == "" then null else $editId end),
                upstream: (if $upstream == "" then null else $upstream end),
+               source: (if $source == "" then null else $source end),
                branch: (if $branch == "" then null else $branch end),
                lastEdit: $lastEdit, lastUpdate: $lastUpdate}]')"
     done < <(omarchy-plugin-catalog 2>/dev/null | jq -c '.[]' 2>/dev/null)
@@ -1346,7 +1377,7 @@ write_catalog() {
       entries="$(jq -n --argjson e "$entries" --arg id "$sid" --arg name "$sname" --arg editId "$sedit" '
         $e + [{id:$id, name:$name, kinds:[], state:"orphaned",
                editId: (if $editId == "" then null else $editId end),
-               upstream:null, branch:null, lastEdit:null, lastUpdate:null}]')"
+               upstream:null, source:null, branch:null, lastEdit:null, lastUpdate:null}]')"
     done < <(find "$DATA_DIR" -mindepth 1 -maxdepth 1 -name '*.json' ! -name 'catalog.json' -print 2>/dev/null)
 
     entries="$(jq -n --argjson e "$entries" --arg enabled "$enabled" '

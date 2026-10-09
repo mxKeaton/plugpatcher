@@ -796,6 +796,12 @@ Panel {
                       }
 
                       ActionButton {
+                        visible: modelData.state === "original" && !!modelData.source
+                        text: "Source"
+                        onClicked: root.runAction(["source", modelData.id])
+                      }
+
+                      ActionButton {
                         visible: modelData.state === "editing" || modelData.state === "orphaned"
                         text: "AI"
                         onClicked: root.runAction(["open", modelData.id])
@@ -820,7 +826,7 @@ Panel {
                       }
 
                       ActionButton {
-                        visible: !!modelData.upstream
+                        visible: (modelData.state === "editing" || modelData.state === "orphaned") && !!modelData.source
                         text: "Source"
                         onClicked: root.runAction(["source", modelData.id])
                       }
