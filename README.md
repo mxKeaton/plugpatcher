@@ -14,6 +14,13 @@ cd plugpatcher
 ./install.sh --enable
 ```
 
+## Requirements
+
+- Omarchy (the Quickshell shell)
+- `git`, `jq`, `python3`
+- `gh` (GitHub CLI) — only for **Send PR** / **Cancel PR**
+- `systemd` (`systemd-run`) — used to restart the shell when switching bar widgets
+
 ## Use
 
 Open the **PlugPatcher** widget in the bar. Each plugin is a card with the

@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "id": "plugpatcher",
+  "id": "io.github.mxkeaton.plugpatcher",
   "name": "PlugPatcher",
   "version": "0.1.0",
   "author": "mxKeaton",

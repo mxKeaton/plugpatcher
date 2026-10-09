@@ -9,8 +9,8 @@ import qs.Ui
 // PR, or revert to the pristine original.
 Panel {
   id: root
-  moduleName: "plugpatcher"
-  ipcTarget: "plugpatcher"
+  moduleName: "io.github.mxkeaton.plugpatcher"
+  ipcTarget: "io.github.mxkeaton.plugpatcher"
 
   readonly property string home: Quickshell.env("HOME")
   readonly property string cli: home + "/.local/bin/plugpatcher"
