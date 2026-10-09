@@ -5,8 +5,12 @@ Patch any Omarchy shell plugin and keep your changes in a git repo. Hit
 the original stays installed and keeps updating — pull upstream updates in with
 your edits on top, and open a pull request when you're ready.
 
+<p align="center">
+  <img src="preview.png" alt="PlugPatcher desktop preview" width="100%">
+</p>
+
 <p>
-  <img src="preview.png" alt="PlugPatcher desktop preview" width="49%">
+  <img src="assets/preview-list.png" alt="PlugPatcher plugin list" width="49%">
   <img src="assets/preview-actions.png" alt="PlugPatcher desktop preview — pull request and delete prompts" width="49%">
 </p>
 
