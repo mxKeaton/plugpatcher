@@ -9,11 +9,6 @@ your edits on top, and open a pull request when you're ready.
   <img src="preview.png" alt="PlugPatcher desktop preview" width="100%">
 </p>
 
-<p>
-  <img src="assets/preview-list.png" alt="PlugPatcher plugin list" width="49%">
-  <img src="assets/preview-actions.png" alt="PlugPatcher desktop preview — pull request and delete prompts" width="49%">
-</p>
-
 ## Install
 
 ```bash
