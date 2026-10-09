@@ -20,7 +20,8 @@ Panel {
     if (u.indexOf("file://") === 0) u = decodeURIComponent(u.substring(7))
     return u
   }
-  readonly property string cli: bundledCli
+  readonly property string pathCli: home + "/.local/bin/plugpatcher"
+  property string cli: bundledCli
   readonly property string catalogPath: home + "/.local/share/plugpatcher/catalog.json"
 
   readonly property color fg: bar ? bar.foreground : Color.foreground
@@ -66,7 +67,11 @@ Panel {
   // The CLI lives outside the plugin, so make sure it exists before actions.
   Process {
     id: cliCheck
-    command: ["bash", "-c", "test -x \"$1\"", "bash", root.cli]
+    // Prefer the CLI bundled in the plugin; fall back to one on PATH.
+    command: ["bash", "-c",
+      "for p in \"$1\" \"$2\"; do if [ -x \"$p\" ]; then printf '%s' \"$p\"; exit 0; fi; done; exit 1",
+      "bash", root.bundledCli, root.pathCli]
+    stdout: StdioCollector { id: cliOut; waitForEnd: true; onStreamFinished: { var p = String(cliOut.text).trim(); if (p !== "") root.cli = p } }
     onExited: function(code) { root.cliAvailable = code === 0; if (root.cliAvailable) root.loadSettings() }
   }
 
