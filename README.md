@@ -28,8 +28,8 @@ actions that apply to it:
 - **Delete** — remove the original, the patched copy, or both.
 - **switch** — flip which version is loaded: patched ⇄ original (for bar widgets this restarts the shell, ~3–4 s).
 
-The toolbar's **Adopt** brings an existing plugin project (a git repo that
-already has your changes) under PlugPatcher, keeping its history.
+`plugpatcher adopt <id>` (CLI) brings an existing plugin project — a git repo
+that already has your changes — under PlugPatcher, keeping its history.
 **Update Plugins** updates every installed plugin.
 
 Your edits live in a private git repo, so they are easy to track and send
