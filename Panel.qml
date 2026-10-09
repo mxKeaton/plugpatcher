@@ -13,7 +13,14 @@ Panel {
   ipcTarget: "io.github.mxkeaton.plugpatcher"
 
   readonly property string home: Quickshell.env("HOME")
-  readonly property string cli: home + "/.local/bin/plugpatcher"
+  // The CLI ships inside the plugin (bin/plugpatcher) so a plain
+  // `omarchy plugin add` works with no setup step. Falls back to a CLI on PATH.
+  readonly property string bundledCli: {
+    var u = String(Qt.resolvedUrl("bin/plugpatcher"))
+    if (u.indexOf("file://") === 0) u = decodeURIComponent(u.substring(7))
+    return u
+  }
+  readonly property string cli: bundledCli
   readonly property string catalogPath: home + "/.local/share/plugpatcher/catalog.json"
 
   readonly property color fg: bar ? bar.foreground : Color.foreground
