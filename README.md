@@ -5,8 +5,8 @@ updatable. Hit **Patch** in the PlugPatcher panel, edit the code, and your
 version loads — the original keeps updating as usual.
 
 <p>
-  <img src="preview.png" alt="PlugPatcher panel" width="49%">
-  <img src="assets/preview-actions.png" alt="Pull request and delete prompts" width="49%">
+  <img src="preview.png" alt="PlugPatcher desktop preview" width="49%">
+  <img src="assets/preview-actions.png" alt="PlugPatcher desktop preview — pull request and delete prompts" width="49%">
 </p>
 
 ## Install
