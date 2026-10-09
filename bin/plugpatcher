@@ -386,6 +386,218 @@ cmd_setup() {
   log "repo: $repo"
 }
 
+# ------------------------------------------------------------------- adopt flow
+
+# Guess a git working copy for an installed plugin that is not yet set up.
+adopt_find_repo() { # id -> path on stdout, or nothing
+  local id="$1" d cand seg base
+  d="$(plugin_dir "$id")"
+  [[ -d "$d/.git" ]] && { printf '%s' "$d"; return 0; }
+  seg="${id##*.}"
+  for cand in "$HOME/Projects"/*/; do
+    [[ -d "$cand/.git" ]] || continue
+    if [[ -f "$cand/manifest.json" ]] && \
+       [[ "$(jq -r '.id // empty' "$cand/manifest.json" 2>/dev/null)" == "$id" ]]; then
+      printf '%s' "${cand%/}"; return 0
+    fi
+  done
+  for cand in "$HOME/Projects"/*/; do
+    [[ -d "$cand/.git" ]] || continue
+    base="$(basename "${cand%/}")"
+    [[ "${base,,}" == "${seg,,}" ]] && { printf '%s' "${cand%/}"; return 0; }
+  done
+  return 1
+}
+
+# List adoptable plugins as: id<TAB>repo<TAB>branch
+adopt_candidates() {
+  local d id repo branch
+  for d in "$PLUGINS_DIR"/*/; do
+    [[ -f "$d/manifest.json" ]] || continue
+    id="$(jq -r '.id // empty' "$d/manifest.json" 2>/dev/null || true)"
+    [[ -n "$id" ]] || continue
+    [[ "$id" == local.* ]] && continue
+    is_setup "$id" && continue
+    repo="$(adopt_find_repo "$id" || true)"
+    branch=""
+    [[ -n "$repo" ]] && branch="$(git -C "$repo" symbolic-ref --quiet --short HEAD 2>/dev/null || true)"
+    printf '%s\t%s\t%s\n' "$id" "$repo" "$branch"
+  done
+}
+
+adopt_interactive() {
+  printf 'PlugPatcher — adopt an existing plugin project\n\n'
+  local lines; lines="$(adopt_candidates)"
+  [[ -n "$lines" ]] || die "no installed plugins are available to adopt"
+  local -a ids=(); local i=0 id repo branch answer
+  while IFS=$'\t' read -r id repo branch; do
+    [[ -n "$id" ]] || continue
+    ids+=("$id"); i=$((i+1))
+    if [[ -n "$repo" ]]; then
+      printf '  %d) %s\n       repo    %s\n       branch  %s\n' "$i" "$id" "$repo" "$branch"
+    else
+      printf '  %d) %s\n       repo    (none found)\n' "$i" "$id"
+    fi
+  done <<< "$lines"
+  printf '\n'
+  read -r -p "Adopt which? [1-$i]: " answer
+  [[ "$answer" =~ ^[0-9]+$ ]] || die "invalid choice"
+  id="${ids[$((answer-1))]:-}"
+  [[ -n "$id" ]] || die "invalid choice"
+
+  repo="$(adopt_find_repo "$id" || true)"
+  if [[ -z "$repo" ]]; then
+    read -r -p "Git working copy to adopt: " repo
+    [[ -n "$repo" ]] || die "a repo path is required"
+  fi
+  branch="$(git -C "$repo" symbolic-ref --quiet --short HEAD 2>/dev/null || true)"
+  read -r -p "Branch to adopt [$branch]: " answer
+  [[ -n "$answer" ]] && branch="$answer"
+  local upstream
+  upstream="$(git -C "$repo" remote get-url upstream 2>/dev/null || git -C "$repo" remote get-url origin 2>/dev/null || true)"
+  read -r -p "Upstream URL [$upstream]: " answer
+  [[ -n "$answer" ]] && upstream="$answer"
+
+  printf '\n  plugin    %s\n  repo      %s\n  branch    %s\n  upstream  %s\n\n' "$id" "$repo" "$branch" "$upstream"
+  read -r -p "Proceed? [y/N] " answer
+  [[ "$answer" =~ ^[Yy]$ ]] || { printf 'cancelled\n'; return 0; }
+
+  cmd_adopt "$id" --repo "$repo" --branch "$branch" --upstream "$upstream"
+}
+
+# Bring an existing git working copy under PlugPatcher: keep its history, make
+# `local` the patched branch, and restore the installed original to pristine.
+cmd_adopt() {
+  local id="" repo="" branch="" upstream="" do_copy=false keep_original=false
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --repo)          repo="${2:-}"; shift 2 ;;
+      --branch)        branch="${2:-}"; shift 2 ;;
+      --upstream)      upstream="${2:-}"; shift 2 ;;
+      --copy)          do_copy=true; shift ;;
+      --keep-original) keep_original=true; shift ;;
+      -*) die "adopt: unknown option '$1'" ;;
+      *)  if [[ -z "$id" ]]; then id="$1"; shift; else die "adopt: unexpected argument '$1'"; fi ;;
+    esac
+  done
+
+  # No id: interactive wizard when we have a TTY, else reopen in a terminal.
+  if [[ -z "$id" ]]; then
+    if [[ -t 0 && -t 1 ]]; then adopt_interactive; return 0; fi
+    if command -v omarchy-launch-floating-terminal-with-presentation >/dev/null 2>&1; then
+      log "opening a terminal to adopt a project"
+      setsid omarchy-launch-floating-terminal-with-presentation "plugpatcher adopt" >/dev/null 2>&1 &
+      return 0
+    fi
+    die "usage: plugpatcher adopt <plugin-id> [--repo PATH] [--branch NAME] [--upstream URL] [--copy] [--keep-original]"
+  fi
+
+  local pd; pd="$(plugin_dir "$id")"
+  [[ -f "$pd/manifest.json" ]] || die "'$id' is not installed at $pd"
+  is_setup "$id" && die "'$id' is already set up (editId: $(edit_id_of "$id"))"
+  [[ "$id" == omarchy.* ]] && die "'$id' is first-party; use: plugpatcher setup $id"
+  need git; need jq
+
+  [[ -n "$repo" ]] || repo="$(adopt_find_repo "$id" || true)"
+  [[ -n "$repo" && -d "$repo/.git" ]] || die "no git working copy found for '$id'; pass --repo <path>"
+  repo="$(cd -- "$repo" && pwd)"
+
+  if [[ -z "$branch" ]]; then
+    branch="$(git -C "$repo" symbolic-ref --quiet --short HEAD 2>/dev/null || true)"
+    [[ -n "$branch" ]] || die "the working copy is on a detached HEAD; pass --branch <name>"
+  fi
+  git -C "$repo" show-ref --verify --quiet "refs/heads/$branch" || \
+    die "branch '$branch' was not found in $repo"
+
+  if [[ -z "$upstream" ]]; then
+    upstream="$(git -C "$repo" remote get-url upstream 2>/dev/null || true)"
+    [[ -n "$upstream" ]] || upstream="$(git -C "$repo" remote get-url origin 2>/dev/null || true)"
+    [[ -n "$upstream" ]] || die "cannot determine the upstream URL; pass --upstream <git-url>"
+  fi
+
+  local name kinds edit_id dest
+  name="$(jq -r '.name // .id' "$pd/manifest.json")"
+  kinds="$(jq -r '(.kinds // []) | join(",")' "$pd/manifest.json")"
+  edit_id="$(edit_id_for "$id")"
+  dest="$(repo_dir "$id")"
+  mkdir -p "$DATA_DIR" "$STATE_DIR"
+  [[ -e "$dest" ]] && die "'$dest' already exists"
+
+  log "adopting '$id' from $repo"
+  log "  branch:   $branch"
+  log "  upstream: $upstream"
+
+  if $do_copy; then
+    cp -a -- "$repo" "$dest"
+  else
+    mv -- "$repo" "$dest"
+  fi
+
+  # Normalize remotes: origin must be the upstream PlugPatcher fetches from;
+  # the fork (if any) is kept as plugpatcher-fork (pr recreates it anyway).
+  if [[ "$(git -C "$dest" remote get-url origin 2>/dev/null || true)" == "$upstream" ]]; then
+    :
+  elif [[ "$(git -C "$dest" remote get-url upstream 2>/dev/null || true)" == "$upstream" ]]; then
+    git -C "$dest" remote remove plugpatcher-fork >/dev/null 2>&1 || true
+    git -C "$dest" remote rename origin plugpatcher-fork
+    git -C "$dest" remote rename upstream origin
+  else
+    git -C "$dest" remote remove plugpatcher-fork >/dev/null 2>&1 || true
+    git -C "$dest" remote rename origin plugpatcher-fork
+    git -C "$dest" remote add origin "$upstream"
+  fi
+  git -C "$dest" fetch -q origin
+  git -C "$dest" remote set-head origin --auto >/dev/null 2>&1 || true
+
+  local upstream_branch; upstream_branch="$(repo_default_branch "$dest")"
+
+  # The adopted work becomes the branch the clone is generated from.
+  git -C "$dest" checkout -q -B local "$branch"
+
+  # The installed original must be the pristine upstream again.
+  if ! $keep_original; then
+    local backup="$STATE_DIR/adopt-backup/${id}-$(date +%Y%m%d-%H%M%S)"
+    if [[ -e "$pd" ]]; then
+      mkdir -p "$(dirname "$backup")"
+      mv -- "$pd" "$backup"
+      log "backed up the previous install to $backup"
+    fi
+    mkdir -p "$pd"
+    git -C "$dest" archive "origin/$upstream_branch" | tar -x -C "$pd"
+    log "restored the original from origin/$upstream_branch"
+  elif [[ ! -e "$pd" ]]; then
+    warn "the original plugin dir is gone but --keep-original was set"
+  fi
+
+  jq -n \
+    --arg sourceId "$id" \
+    --arg editId "$edit_id" \
+    --arg name "$name" \
+    --arg upstream "$upstream" \
+    --arg upstreamBranch "$upstream_branch" \
+    --arg branch "local" \
+    --argjson firstParty false \
+    --arg createdAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    --argjson lastSync "$(date +%s)" \
+    --arg want "patched" \
+    '{version:1, sourceId:$sourceId, editId:$editId, name:$name, upstream:$upstream,
+      upstreamBranch:$upstreamBranch, branch:$branch, firstParty:$firstParty,
+      createdAt:$createdAt, lastSync:$lastSync, want:$want}' > "$(meta_file "$id")"
+
+  generate_clone "$id"
+  rescan
+
+  if ! wait_discovered "$edit_id"; then
+    warn "clone '$edit_id' was not discovered by the shell yet"
+  fi
+  ensure_active "$id"
+
+  write_catalog >/dev/null 2>&1 || true
+  notify "PlugPatcher: adopted $name" "Active as $edit_id"
+  log "adopted '$id' → clone '$edit_id'"
+  log "repo: $dest"
+}
+
 # -------------------------------------------------------------------- sync flow
 
 cmd_sync() {
@@ -1108,6 +1320,7 @@ Commands:
   list                 installed plugins and their edit state
   status <id>          details for one plugin
   setup <id> [url]     start editing (clone upstream into a per-project repo)
+  adopt [id]           bring an existing git project under PlugPatcher (keeps history)
   sync <id>            pull upstream into the repo (rebase) and regenerate the clone
   pr <id> [ai|manual]  open a PR: ai writes the text, manual opens GitHub's form
   revert <id>          stop editing: restore the original, delete the clone
@@ -1137,6 +1350,7 @@ main() {
     list)         cmd_list "$@" ;;
     status)       cmd_status "$@" ;;
     setup)        cmd_setup "$@" ;;
+    adopt)        cmd_adopt "$@" ;;
     sync)         cmd_sync "$@" ;;
     pr)           cmd_pr "$@" ;;
     revert|remove|rm) cmd_revert "$@" ;;

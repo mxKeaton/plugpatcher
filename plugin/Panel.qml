@@ -124,6 +124,7 @@ Panel {
     if (a === "use" || a === "switch") return "Switching install…"
     if (a === "open") return "Opening…"
     if (a === "update-all") return "Opening a terminal…"
+    if (a === "adopt") return "Opening the adopt wizard…"
     if (a === "editor") return "Opening the editor…"
     if (a === "files") return "Opening the folder…"
     return "Working…"
@@ -464,6 +465,15 @@ Panel {
                 onClicked: root.sortBy = modelData.key
               }
             }
+          }
+
+          ActionButton {
+            id: adoptButton
+            anchors.right: updatePluginsButton.left
+            anchors.rightMargin: Style.space(6)
+            anchors.verticalCenter: parent.verticalCenter
+            text: "Adopt"
+            onClicked: root.runAction(["adopt"])
           }
 
           ActionButton {

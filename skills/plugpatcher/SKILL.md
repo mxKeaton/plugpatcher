@@ -42,6 +42,7 @@ The clone carries `omarchy.clonedFrom = <id>`, so the shell:
 | `plugpatcher list` | installed plugins + edit state (writes `catalog.json`) |
 | `plugpatcher status <id>` | repo/branch/upstream ahead-behind for one plugin |
 | `plugpatcher setup <id> [url]` | start editing: clone upstream into the repo, generate the clone, switch to it |
+| `plugpatcher adopt [id] [--repo PATH] [--branch B] [--upstream URL]` | bring an existing git working copy under PlugPatcher, keeping its history; makes `local` the patched branch and resets the installed original to pristine (no arg = interactive wizard) |
 | `plugpatcher sync <id>` | `git fetch` upstream, rebase your branch, regenerate the clone; aborts on conflict |
 | `plugpatcher pr <id> [ai|manual]` | push your branch and open a PR: `ai` writes the title/description, `manual` opens GitHub's form (one branch per patch) |
 | `plugpatcher pr-cancel <id>` | close the PR most recently opened for `<id>` (also `unpr`) |
@@ -77,7 +78,9 @@ JSON (the panel uses it for its dropdowns).
    `~/.local/share/plugpatcher/<id>/`.
 2. **To edit**: make changes **in the repo**, not in the loaded clone
    (`plugins/local.<seg>/`). The repo is the source of truth and what `pr` and
-   `sync` operate on.
+   `sync` operate on. If a plugin was already being edited outside PlugPatcher
+   (its own git checkout or a fork in `~/Projects`), use `plugpatcher adopt <id>`
+   to bring that history in instead of `setup` (which squashes).
 3. **After editing**: run `plugpatcher sync <id>` so the loaded clone reflects
    the repo. `sync` regenerates the clone and **restarts the shell** (a plain
    rescan does not reliably rebuild a live widget/panel), so the change becomes
