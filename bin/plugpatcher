@@ -716,6 +716,10 @@ cmd_use() {
   esac
 
   rescan
+  # A bar-widget instance is reused when the bar entry id flips, so the switched
+  # plugin would keep rendering the old component; restart to rebuild it.
+  # (bar-kind plugins already restarted via set_bar.)
+  [[ ",$kinds," == *",bar,"* ]] || schedule_shell_restart
   write_catalog >/dev/null 2>&1 || true
   log "switched '$id' to $want"
 }
