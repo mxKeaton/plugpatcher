@@ -4,9 +4,10 @@ Patch Omarchy shell plugins while the original install stays pristine and
 updatable. Hit **Patch** in the PlugPatcher panel, edit the code, and your
 version loads — the original keeps updating as usual.
 
-![PlugPatcher panel](preview.png)
-
-![Pull request and delete prompts](assets/preview-actions.png)
+<p>
+  <img src="preview.png" alt="PlugPatcher panel" width="49%">
+  <img src="assets/preview-actions.png" alt="Pull request and delete prompts" width="49%">
+</p>
 
 ## Install
 
