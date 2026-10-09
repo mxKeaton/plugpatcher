@@ -394,7 +394,7 @@ Panel {
             text: root.settingsOpen
                   ? "Configure how the AI button opens projects"
                   : (root.busy ? root.statusMessage
-                               : (root.plugins.length + " plugins · patch, track, and contribute plugin edits"))
+                               : (root.plugins.length + " plugins · patch, update, and share plugin edits"))
             color: root.muted
             font.family: root.ff
             font.pixelSize: Style.font.caption

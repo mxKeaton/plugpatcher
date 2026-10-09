@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
 # plugpatcher — patch Omarchy shell plugins in a git repo, load your edits, and
-# send the changes upstream.
+# send the changes upstream; the original install keeps updating.
 #
 #   original plugin   ~/.config/omarchy/plugins/<id>          (pristine install, left in place)
 #   per-project repo  ~/.local/share/plugpatcher/<id>/        (git clone of upstream + your branches)
@@ -1507,7 +1507,7 @@ cmd_status() {
 usage() {
   cat <<'USAGE'
 plugpatcher — patch Omarchy shell plugins in a git repo and send your changes
-upstream.
+upstream. The original install is left in place and keeps updating.
 
   original plugin   ~/.config/omarchy/plugins/<id>          (pristine install, left in place)
   per-project repo  ~/.local/share/plugpatcher/<id>/        (git clone of upstream + your branch)

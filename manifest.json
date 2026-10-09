@@ -4,7 +4,7 @@
   "name": "PlugPatcher",
   "version": "0.1.0",
   "author": "mxKeaton",
-  "description": "Patch any Omarchy shell plugin in a real git repo, and send your changes upstream.",
+  "description": "Patch any Omarchy shell plugin in a git repo and send your changes upstream. The original keeps updating.",
   "kinds": [
     "bar-widget"
   ],

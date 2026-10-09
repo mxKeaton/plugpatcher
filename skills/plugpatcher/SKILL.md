@@ -13,11 +13,12 @@ description: >
 
 # PlugPatcher
 
-PlugPatcher gives any Omarchy plugin a real git repo to be edited in: your own
-version loads while the original install is left in place, and your changes can
-be tracked, rebased onto upstream, and sent back as a pull request. It works for
-any plugin, first- or third-party — Omarchy's built-in `omarchy plugin clone`
-only handles first-party (`omarchy.*`) plugins and has no edit/PR path.
+PlugPatcher gives any Omarchy plugin a git repo to be edited in: your own
+version loads while the original install is left in place and keeps updating,
+and your changes can be tracked, rebased onto upstream, and sent back as a pull
+request. It works for any plugin, first- or third-party — Omarchy's built-in
+`omarchy plugin clone` only handles first-party (`omarchy.*`) plugins and has no
+edit/PR path.
 
 ## The model
 
