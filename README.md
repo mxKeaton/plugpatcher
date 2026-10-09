@@ -2,8 +2,8 @@
 
 Patch any Omarchy shell plugin and keep your changes in a git repo. Hit
 **Patch** in the PlugPatcher panel, edit the code, and your version loads while
-the original stays installed and keeps updating — merge upstream into your edits
-anytime, and send them back as a pull request.
+the original stays installed and keeps updating — pull upstream updates in with
+your edits on top, and send them back as a pull request.
 
 <p>
   <img src="preview.png" alt="PlugPatcher desktop preview" width="49%">
@@ -40,7 +40,7 @@ Each plugin in the panel is a card:
 - **Patch** — start editing a plugin.
 - **AI** — open your coding agent in the code.
 - **Editor** / **Browse** — open the code in your editor / file manager.
-- **Update** — merge upstream changes into your version and rebuild it.
+- **Update** — pull upstream updates in and re-apply your edits on top.
 - **Source** — open the plugin's GitHub page.
 - **Send PR** — **Manual PR** (GitHub's form) or **AI PR** (writes the text); **Cancel PR** withdraws it.
 - **Delete** — remove the original, the patched copy, or both.
