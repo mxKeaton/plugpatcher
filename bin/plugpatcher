@@ -679,6 +679,85 @@ cmd_revert() {
 }
 
 # Switch between the patched clone and the original (enable/disable only).
+# The running shell's config dir (matches omarchy-restart-shell).
+shell_config_dir() {
+  local p; p="$(systemctl --user show-environment 2>/dev/null | sed -n 's/^OMARCHY_PATH=//p' | tail -1)"
+  [[ -n "$p" && -f "$p/shell/shell.qml" ]] || p="/usr/share/omarchy"
+  printf '%s/shell' "$p"
+}
+
+# Flip a plugin's config entry between its source and clone id while the shell is
+# stopped, then start the shell again. A live id flip makes the bar's Repeater
+# rebuild, which can segfault quickshell, so the edit happens with it down.
+switch_entry_safely() { # source_id clone_id target_id
+  local src="$1" clone="$2" target="$3"
+  local cfg="${XDG_CONFIG_HOME:-$HOME/.config}/omarchy/shell.json"
+  [[ -f "$cfg" ]] || return 0
+
+  # Read-only check first: nothing to do means no shell restart at all.
+  local needs
+  needs="$(python3 - "$src" "$clone" "$target" "$cfg" <<'PY'
+import json, sys
+try: d = json.load(open(sys.argv[4]))
+except Exception: print("no"); raise SystemExit
+pairs = {sys.argv[1], sys.argv[2]}; target = sys.argv[3]
+def stale(seq):
+    return any(isinstance(e, dict) and e.get("id") in pairs and e.get("id") != target for e in seq)
+for sec in (d.get("bar", {}).get("layout", {}) or {}):
+    if stale(d["bar"]["layout"][sec]): print("yes"); raise SystemExit
+if isinstance(d.get("plugins"), list) and stale(d["plugins"]): print("yes"); raise SystemExit
+print("no")
+PY
+)"
+  if [[ "$needs" != "yes" ]]; then return 0; fi
+
+  local dir; dir="$(shell_config_dir)"
+  command -v quickshell >/dev/null 2>&1 && \
+    while timeout 5 quickshell kill -p "$dir" --any-display >/dev/null 2>&1; do :; done
+
+  python3 - "$src" "$clone" "$target" "$cfg" <<'PY'
+import json, os, sys
+src, clone, target, path = sys.argv[1:5]
+try: d = json.load(open(path))
+except Exception: raise SystemExit
+pairs = {src, clone}
+def swap(seq):
+    out, seen = [], False
+    for e in seq:
+        if isinstance(e, dict) and e.get("id") in pairs:
+            e = dict(e); e["id"] = target
+        if isinstance(e, dict) and e.get("id") == target:
+            if seen: continue
+            seen = True
+        out.append(e)
+    return out
+for sec in (d.get("bar", {}).get("layout", {}) or {}):
+    d["bar"]["layout"][sec] = swap(d["bar"]["layout"][sec])
+if isinstance(d.get("plugins"), list):
+    d["plugins"] = swap(d["plugins"])
+tmp = path + ".pp.tmp"
+json.dump(d, open(tmp, "w"), indent=2)
+os.replace(tmp, path)
+PY
+
+  if [[ -z "${HYPRLAND_INSTANCE_SIGNATURE:-}" ]]; then
+    local hd
+    hd="$(find "${XDG_RUNTIME_DIR:-/run/user/$UID}/hypr" -mindepth 1 -maxdepth 1 -type d -printf '%T@ %p\n' 2>/dev/null | sort -n | tail -n 1 | cut -d' ' -f2-)"
+    [[ -n "$hd" ]] && export HYPRLAND_INSTANCE_SIGNATURE="${hd##*/}"
+  fi
+  if command -v hyprctl >/dev/null 2>&1; then
+    hyprctl dispatch 'hl.dsp.exec_cmd("omarchy-launch-shell")' >/dev/null 2>&1 || true
+  else
+    setsid omarchy-launch-shell >/dev/null 2>&1 &
+  fi
+
+  local i
+  for (( i = 0; i < 60; i++ )); do
+    omarchy-shell shell ping >/dev/null 2>&1 && return 0
+    sleep 0.25
+  done
+}
+
 cmd_use() {
   local id="${1:-}" want="${2:-}"
   [[ -n "$id" ]] || die "usage: plugpatcher use <plugin-id> <patched|original|toggle>"
@@ -703,23 +782,20 @@ cmd_use() {
       if [[ ! -d "$(plugin_dir "$edit_id")" && -d "$(repo_dir "$id")" ]]; then
         generate_clone "$id" >/dev/null 2>&1 || true
       fi
-      ensure_active "$id" ;;
+      if [[ ",$kinds," == *",bar,"* ]]; then ensure_active "$id"; else switch_entry_safely "$id" "$edit_id" "$edit_id"; fi ;;
     original)
       touch_want "$id" original
       if [[ ",$kinds," == *",bar,"* ]]; then
         set_bar "$id"
-      fi
-      omarchy plugin disable "$edit_id" >/dev/null 2>&1 || true
-      omarchy plugin enable "$id" >/dev/null 2>&1 || true ;;
+        omarchy plugin disable "$edit_id" >/dev/null 2>&1 || true
+        omarchy plugin enable "$id" >/dev/null 2>&1 || true
+      else
+        switch_entry_safely "$id" "$edit_id" "$id"
+      fi ;;
     *)
       die "usage: plugpatcher use <plugin-id> <patched|original|toggle>" ;;
   esac
 
-  rescan
-  # A bar-widget instance is reused when the bar entry id flips, so the switched
-  # plugin would keep rendering the old component; restart to rebuild it.
-  # (bar-kind plugins already restarted via set_bar.)
-  [[ ",$kinds," == *",bar,"* ]] || schedule_shell_restart
   write_catalog >/dev/null 2>&1 || true
   log "switched '$id' to $want"
 }
