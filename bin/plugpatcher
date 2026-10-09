@@ -694,26 +694,10 @@ switch_entry_safely() { # source_id clone_id target_id
   local cfg="${XDG_CONFIG_HOME:-$HOME/.config}/omarchy/shell.json"
   [[ -f "$cfg" ]] || return 0
 
-  # Read-only check first: nothing to do means no shell restart at all.
-  local needs
-  needs="$(python3 - "$src" "$clone" "$target" "$cfg" <<'PY'
-import json, sys
-try: d = json.load(open(sys.argv[4]))
-except Exception: print("no"); raise SystemExit
-pairs = {sys.argv[1], sys.argv[2]}; target = sys.argv[3]
-def stale(seq):
-    return any(isinstance(e, dict) and e.get("id") in pairs and e.get("id") != target for e in seq)
-for sec in (d.get("bar", {}).get("layout", {}) or {}):
-    if stale(d["bar"]["layout"][sec]): print("yes"); raise SystemExit
-if isinstance(d.get("plugins"), list) and stale(d["plugins"]): print("yes"); raise SystemExit
-print("no")
-PY
-)"
-  if [[ "$needs" != "yes" ]]; then return 0; fi
-
   # Run the stop/rewrite/start in a transient unit: this process is a child of
   # the shell when launched from the panel, and killing the shell would kill us
-  # before we could start it again.
+  # before we could start it again. The worker re-checks under a lock, so rapid
+  # clicks queue instead of being dropped.
   local self; self="$(readlink -f "${BASH_SOURCE[0]}")"
   if command -v systemd-run >/dev/null 2>&1; then
     systemd-run --user --collect --quiet --unit="plugpatcher-switch-$RANDOM" \
@@ -732,6 +716,33 @@ PY
 cmd_switch_core() { # source_id clone_id target_id
   local src="$1" clone="$2" target="$3"
   local cfg="${XDG_CONFIG_HOME:-$HOME/.config}/omarchy/shell.json"
+
+  mkdir -p "$STATE_DIR"
+  exec >>"$(log_file switch)" 2>&1
+  echo "=== $(date -Is) switch $src <-> $clone -> $target ==="
+
+  # Never run two switches at once; wait for any in-flight one instead of
+  # dropping the click.
+  exec 9>"$STATE_DIR/switch.lock" || true
+  if ! flock -w 60 9; then echo "another switch is stuck; giving up"; return 0; fi
+
+  # Under the lock: nothing to do means no shell restart at all.
+  local needs
+  needs="$(python3 - "$src" "$clone" "$target" "$cfg" <<'PY'
+import json, sys
+try: d = json.load(open(sys.argv[4]))
+except Exception: print("no"); raise SystemExit
+pairs = {sys.argv[1], sys.argv[2]}; target = sys.argv[3]
+def stale(seq):
+    return any(isinstance(e, dict) and e.get("id") in pairs and e.get("id") != target for e in seq)
+for sec in (d.get("bar", {}).get("layout", {}) or {}):
+    if stale(d["bar"]["layout"][sec]): print("yes"); raise SystemExit
+if isinstance(d.get("plugins"), list) and stale(d["plugins"]): print("yes"); raise SystemExit
+print("no")
+PY
+)"
+  if [[ "$needs" != "yes" ]]; then echo "already on $target; nothing to do"; return 0; fi
+
   local dir; dir="$(shell_config_dir)"
   command -v quickshell >/dev/null 2>&1 && \
     while timeout 5 quickshell kill -p "$dir" --any-display >/dev/null 2>&1; do :; done
@@ -772,11 +783,24 @@ PY
     setsid omarchy-launch-shell >/dev/null 2>&1 &
   fi
 
-  local i
-  for (( i = 0; i < 80; i++ )); do
-    omarchy-shell shell ping >/dev/null 2>&1 && break
+  # Make sure the shell actually came back; if not, fall back to Omarchy's own
+  # restart so the user is never left with no bar.
+  local i ok=""
+  for (( i = 0; i < 60; i++ )); do
+    omarchy-shell shell ping >/dev/null 2>&1 && { ok=1; break; }
     sleep 0.25
   done
+  if [[ -z "$ok" ]]; then
+    echo "shell did not come back; falling back to 'omarchy restart shell'"
+    omarchy restart shell >/dev/null 2>&1 || true
+    for (( i = 0; i < 120; i++ )); do
+      omarchy-shell shell ping >/dev/null 2>&1 && break
+      sleep 0.25
+    done
+  fi
+  # Let the fresh shell finish loading plugins before the lock is released and
+  # another switch may kill it mid-startup.
+  sleep 1.5
   write_catalog >/dev/null 2>&1 || true
 }
 
@@ -804,15 +828,27 @@ cmd_use() {
       if [[ ! -d "$(plugin_dir "$edit_id")" && -d "$(repo_dir "$id")" ]]; then
         generate_clone "$id" >/dev/null 2>&1 || true
       fi
-      if [[ ",$kinds," == *",bar,"* ]]; then ensure_active "$id"; else switch_entry_safely "$id" "$edit_id" "$edit_id"; fi ;;
+      if [[ ",$kinds," == *",bar,"* ]]; then
+        ensure_active "$id"
+      elif [[ ",$kinds," == *",bar-widget,"* ]]; then
+        # A bar widget reload rebuilds the bar's Repeater, which can crash the
+        # shell, so this one goes through the stop/rewrite/start path.
+        switch_entry_safely "$id" "$edit_id" "$edit_id"
+      else
+        # Non-bar plugins switch through Omarchy's own API.
+        omarchy plugin enable "$edit_id" >/dev/null 2>&1 || true
+      fi ;;
     original)
       touch_want "$id" original
       if [[ ",$kinds," == *",bar,"* ]]; then
         set_bar "$id"
         omarchy plugin disable "$edit_id" >/dev/null 2>&1 || true
         omarchy plugin enable "$id" >/dev/null 2>&1 || true
-      else
+      elif [[ ",$kinds," == *",bar-widget,"* ]]; then
         switch_entry_safely "$id" "$edit_id" "$id"
+      else
+        omarchy plugin disable "$edit_id" >/dev/null 2>&1 || true
+        omarchy plugin enable "$id" >/dev/null 2>&1 || true
       fi ;;
     *)
       die "usage: plugpatcher use <plugin-id> <patched|original|toggle>" ;;

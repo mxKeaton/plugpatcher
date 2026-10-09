@@ -49,7 +49,7 @@ The clone carries `omarchy.clonedFrom = <id>`, so the shell:
 | `plugpatcher source <id>` | open the plugin's upstream (source) page in the browser |
 | `plugpatcher open-url <url>` | open a URL in the browser |
 | `plugpatcher revert <id>` | restore the original, delete/backup the repo |
-| `plugpatcher use <id> <side>` | switch the loaded plugin: `patched` or `original` (enable/disable only) |
+| `plugpatcher use <id> <side>` | switch the loaded plugin: `patched` or `original`. Bar widgets restart the shell to rebuild (a live bar reload can crash Quickshell); other kinds use `omarchy plugin enable/disable`. |
 | `plugpatcher delete <id> <side>` | delete `original`, `patched`, or `both` |
 | `plugpatcher open <id>` | launch the configured harness, or the system default agent, in the repo |
 | `plugpatcher files <id>` | open the patch folder in the default file manager |

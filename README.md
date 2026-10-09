@@ -26,7 +26,7 @@ actions that apply to it:
 - **Source** — open the plugin's original GitHub page.
 - **Send PR** — then pick **Manual PR** (opens GitHub's form for you to fill in) or **AI PR** (writes the title and description for you); **Cancel PR** withdraws it.
 - **Delete** — remove the original, the patched copy, or both.
-- **switch** — flip which version is loaded: patched ⇄ original.
+- **switch** — flip which version is loaded: patched ⇄ original (for bar widgets this restarts the shell, ~3–4 s).
 
 The toolbar's **Adopt** brings an existing plugin project (a git repo that
 already has your changes) under PlugPatcher, keeping its history.
