@@ -3,7 +3,7 @@
 Patch any Omarchy shell plugin and keep your changes in a git repo. Hit
 **Patch** in the PlugPatcher panel, edit the code, and your version loads while
 the original stays installed and keeps updating — pull upstream updates in with
-your edits on top, and send them back as a pull request.
+your edits on top, and open a pull request when you're ready.
 
 <p>
   <img src="preview.png" alt="PlugPatcher desktop preview" width="49%">
