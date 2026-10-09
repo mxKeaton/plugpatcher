@@ -1,8 +1,8 @@
 # PlugPatcher
 
-Patch Omarchy shell plugins while the original install stays pristine and
-updatable. Hit **Patch** in the PlugPatcher panel, edit the code, and your
-version loads — the original keeps updating as usual.
+Patch any Omarchy shell plugin and keep your changes in a real git repo. Hit
+**Patch** in the PlugPatcher panel, edit the code, and your version loads — then
+track it, rebase it onto upstream, and send it back as a pull request.
 
 <p>
   <img src="preview.png" alt="PlugPatcher desktop preview" width="49%">

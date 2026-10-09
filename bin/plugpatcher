@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 #
-# plugpatcher — edit Omarchy shell plugins while keeping the original pristine
-# and updatable.
+# plugpatcher — patch Omarchy shell plugins in a git repo, load your edits, and
+# send the changes upstream.
 #
-#   original plugin   ~/.config/omarchy/plugins/<id>          (untouched, omarchy-updatable)
+#   original plugin   ~/.config/omarchy/plugins/<id>          (pristine install, left in place)
 #   per-project repo  ~/.local/share/plugpatcher/<id>/        (git clone of upstream + your branches)
 #   generated clone   ~/.config/omarchy/plugins/local.<seg>/  (what the shell loads)
 #
@@ -1506,10 +1506,10 @@ cmd_status() {
 
 usage() {
   cat <<'USAGE'
-plugpatcher — edit Omarchy shell plugins while keeping the original pristine
-and updatable.
+plugpatcher — patch Omarchy shell plugins in a git repo and send your changes
+upstream.
 
-  original plugin   ~/.config/omarchy/plugins/<id>          (untouched, omarchy-updatable)
+  original plugin   ~/.config/omarchy/plugins/<id>          (pristine install, left in place)
   per-project repo  ~/.local/share/plugpatcher/<id>/        (git clone of upstream + your branch)
   generated clone   ~/.config/omarchy/plugins/local.<seg>/  (what the shell loads)
 

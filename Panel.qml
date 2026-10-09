@@ -5,8 +5,8 @@ import qs.Commons
 import qs.Ui
 
 // PlugPatcher bar button + popup. Lists the user's shell plugins and drives the
-// `plugpatcher` CLI: patch a plugin, update it from upstream, open it, send a
-// PR, or revert to the pristine original.
+// `plugpatcher` CLI: patch a plugin into a git repo, track and update it, open
+// it, send a pull request, or switch back to the original.
 Panel {
   id: root
   moduleName: "io.github.mxkeaton.plugpatcher"
@@ -394,7 +394,7 @@ Panel {
             text: root.settingsOpen
                   ? "Configure how the AI button opens projects"
                   : (root.busy ? root.statusMessage
-                               : (root.plugins.length + " plugins · patch without losing updates"))
+                               : (root.plugins.length + " plugins · patch, track, and contribute plugin edits"))
             color: root.muted
             font.family: root.ff
             font.pixelSize: Style.font.caption

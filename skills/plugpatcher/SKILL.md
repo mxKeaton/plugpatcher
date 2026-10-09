@@ -2,26 +2,27 @@
 name: plugpatcher
 description: >
   REQUIRED for editing, patching, extending, or fixing any Omarchy shell plugin
-  while keeping the original install pristine and updatable. Use when asked to
-  customize a plugin, keep local changes across plugin updates, manage an
-  adopted/patched plugin, sync upstream changes into a modified plugin, open a
-  modified plugin for AI editing, or open a pull request for local plugin
-  changes. Triggers: "edit plugin", "patch plugin", "customize plugin X",
-  "my changes to plugin X", "adopt plugin", "plugpatcher", "sync plugin",
-  "update my patched plugin", "PR my plugin change".
+  in a git repo and contributing the changes upstream. Use when asked to
+  customize a plugin, patch a plugin into a repo, manage an adopted/patched
+  plugin, sync upstream changes into a modified plugin, open a modified plugin
+  for AI editing, or open a pull request for local plugin changes. Triggers:
+  "edit plugin", "patch plugin", "customize plugin X", "my changes to plugin X",
+  "adopt plugin", "plugpatcher", "sync plugin", "update my patched plugin",
+  "PR my plugin change".
 ---
 
 # PlugPatcher
 
-PlugPatcher lets a user keep a normally-installed Omarchy plugin **pristine and
-updatable** while loading their own edited version. It works for any plugin
-(first- or third-party) because Omarchy's built-in `omarchy plugin clone` only
-handles first-party (`omarchy.*`) plugins and has no update/merge path.
+PlugPatcher gives any Omarchy plugin a real git repo to be edited in: your own
+version loads while the original install is left in place, and your changes can
+be tracked, rebased onto upstream, and sent back as a pull request. It works for
+any plugin, first- or third-party — Omarchy's built-in `omarchy plugin clone`
+only handles first-party (`omarchy.*`) plugins and has no edit/PR path.
 
 ## The model
 
 ```
-~/.config/omarchy/plugins/<id>/            original  — untouched, `omarchy plugin update`-able
+~/.config/omarchy/plugins/<id>/            original  — the pristine install, left in place
 ~/.local/share/plugpatcher/<id>/           repo      — git clone of upstream + your branch (source of truth)
 ~/.config/omarchy/plugins/local.<seg>/     clone     — generated from the repo; what the shell loads
 ~/.local/share/plugpatcher/catalog.json    state     — machine-readable list for the GUI/AI
@@ -95,7 +96,7 @@ JSON (the panel uses it for its dropdowns).
    with `plugpatcher pr-cancel <id>`. The `local.<seg>` manifest rewrite never
    enters the PR — it is applied only at clone-generation time.
 6. **Never** edit `/usr/share/omarchy`, and never run destructive git commands
-   in the original plugin dir. The original remains the updatable baseline.
+   in the original plugin dir. The original is left in place, untouched.
 7. **To stop editing**: `plugpatcher remove <id>` restores the original.
 
 ## Notes for agents

@@ -4,7 +4,7 @@
   "name": "PlugPatcher",
   "version": "0.1.0",
   "author": "mxKeaton",
-  "description": "Edit Omarchy shell plugins while keeping the original untouched and updatable. Lists plugins and drives the plugpatcher CLI.",
+  "description": "Patch any Omarchy shell plugin in a real git repo, and send your changes upstream.",
   "kinds": [
     "bar-widget"
   ],
@@ -13,7 +13,7 @@
   },
   "barWidget": {
     "displayName": "PlugPatcher",
-    "description": "Manage edited (patched) shell plugins",
+    "description": "Patch plugins and contribute the changes back",
     "category": "System",
     "allowMultiple": false
   }
