@@ -689,8 +689,8 @@ shell_config_dir() {
 # Flip a plugin's config entry between its source and clone id while the shell is
 # stopped, then start the shell again. A live id flip makes the bar's Repeater
 # rebuild, which can segfault quickshell, so the edit happens with it down.
-switch_entry_safely() { # source_id clone_id target_id
-  local src="$1" clone="$2" target="$3"
+switch_entry_safely() { # source_id clone_id target_id [nonwidget]
+  local src="$1" clone="$2" target="$3" nonwidget="${4:-false}"
   local cfg="${XDG_CONFIG_HOME:-$HOME/.config}/omarchy/shell.json"
   [[ -f "$cfg" ]] || return 0
 
@@ -705,16 +705,16 @@ switch_entry_safely() { # source_id clone_id target_id
       --setenv="XDG_CONFIG_HOME=${XDG_CONFIG_HOME:-$HOME/.config}" \
       --setenv="XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-/run/user/$UID}" \
       --setenv="HYPRLAND_INSTANCE_SIGNATURE=${HYPRLAND_INSTANCE_SIGNATURE:-}" \
-      "$self" __switch "$src" "$clone" "$target" >/dev/null 2>&1 &
+      "$self" __switch "$src" "$clone" "$target" "$nonwidget" >/dev/null 2>&1 &
   else
-    setsid "$self" __switch "$src" "$clone" "$target" </dev/null >/dev/null 2>&1 &
+    setsid "$self" __switch "$src" "$clone" "$target" "$nonwidget" </dev/null >/dev/null 2>&1 &
   fi
 }
 
 # Detached worker for switch_entry_safely: stop the shell, rewrite the entry,
 # start the shell again.
-cmd_switch_core() { # source_id clone_id target_id
-  local src="$1" clone="$2" target="$3"
+cmd_switch_core() { # source_id clone_id target_id [nonwidget]
+  local src="$1" clone="$2" target="$3" nonwidget="${4:-false}"
   local cfg="${XDG_CONFIG_HOME:-$HOME/.config}/omarchy/shell.json"
 
   mkdir -p "$STATE_DIR"
@@ -728,17 +728,26 @@ cmd_switch_core() { # source_id clone_id target_id
 
   # Under the lock: nothing to do means no shell restart at all.
   local needs
-  needs="$(python3 - "$src" "$clone" "$target" "$cfg" <<'PY'
+  needs="$(python3 - "$src" "$clone" "$target" "$cfg" "$nonwidget" <<'PY'
 import json, sys
-try: d = json.load(open(sys.argv[4]))
+src, clone, target, path, nonwidget = sys.argv[1:6]
+nonwidget = nonwidget == "true"
+try: d = json.load(open(path))
 except Exception: print("no"); raise SystemExit
-pairs = {sys.argv[1], sys.argv[2]}; target = sys.argv[3]
+pairs = {src, clone}
 def stale(seq):
     return any(isinstance(e, dict) and e.get("id") in pairs and e.get("id") != target for e in seq)
+bad = False
 for sec in (d.get("bar", {}).get("layout", {}) or {}):
-    if stale(d["bar"]["layout"][sec]): print("yes"); raise SystemExit
-if isinstance(d.get("plugins"), list) and stale(d["plugins"]): print("yes"); raise SystemExit
-print("no")
+    if stale(d["bar"]["layout"][sec]): bad = True
+if isinstance(d.get("plugins"), list) and stale(d["plugins"]): bad = True
+dis = d.get("disabledPlugins", []) or []
+restores = d.get("cloneSourceRestores", []) or []
+if target == src:
+    if src in dis or clone in restores: bad = True
+else:
+    if nonwidget and (src not in dis or clone not in restores): bad = True
+print("yes" if bad else "no")
 PY
 )"
   if [[ "$needs" != "yes" ]]; then echo "already on $target; nothing to do"; return 0; fi
@@ -747,9 +756,10 @@ PY
   command -v quickshell >/dev/null 2>&1 && \
     while timeout 5 quickshell kill -p "$dir" --any-display >/dev/null 2>&1; do :; done
 
-  python3 - "$src" "$clone" "$target" "$cfg" <<'PY'
+  python3 - "$src" "$clone" "$target" "$cfg" "$nonwidget" <<'PY'
 import json, os, sys
-src, clone, target, path = sys.argv[1:5]
+src, clone, target, path, nonwidget = sys.argv[1:6]
+nonwidget = nonwidget == "true"
 try: d = json.load(open(path))
 except Exception: raise SystemExit
 pairs = {src, clone}
@@ -767,6 +777,19 @@ for sec in (d.get("bar", {}).get("layout", {}) or {}):
     d["bar"]["layout"][sec] = swap(d["bar"]["layout"][sec])
 if isinstance(d.get("plugins"), list):
     d["plugins"] = swap(d["plugins"])
+
+# Omarchy disables the source in disabledPlugins (and records a restore) while
+# a clone with non-bar-widget kinds is active. Undo/redo that with the flip.
+dis = [x for x in (d.get("disabledPlugins", []) or []) if x not in pairs]
+restores = [x for x in (d.get("cloneSourceRestores", []) or []) if x not in pairs]
+if target == clone and nonwidget:
+    if src not in dis: dis.append(src)
+    if clone not in restores: restores.append(clone)
+if dis: d["disabledPlugins"] = dis
+else: d.pop("disabledPlugins", None)
+if restores: d["cloneSourceRestores"] = restores
+else: d.pop("cloneSourceRestores", None)
+
 tmp = path + ".pp.tmp"
 json.dump(d, open(tmp, "w"), indent=2)
 os.replace(tmp, path)
@@ -812,6 +835,11 @@ cmd_use() {
   mf="$(meta_file "$id")"
   edit_id="$(jq -r '.editId' "$mf")"
   kinds="$(jq -r '(.kinds // []) | join(",")' "$(manifest_path "$id")" 2>/dev/null || true)"
+  # Non-bar-widget kinds (overlay, panel, ...) make Omarchy keep the source in
+  # disabledPlugins while the clone is active; the switch must undo that too.
+  local nonwidget=false k
+  local -a _ka=(); IFS=, read -ra _ka <<< "$kinds"
+  for k in "${_ka[@]}"; do [[ -n "$k" && "$k" != "bar-widget" ]] && nonwidget=true; done
 
   # 'toggle' decides from the live enabled state, not a cached catalog, so a
   # stale button label cannot switch the wrong way.
@@ -833,7 +861,7 @@ cmd_use() {
       elif [[ ",$kinds," == *",bar-widget,"* ]]; then
         # A bar widget reload rebuilds the bar's Repeater, which can crash the
         # shell, so this one goes through the stop/rewrite/start path.
-        switch_entry_safely "$id" "$edit_id" "$edit_id"
+        switch_entry_safely "$id" "$edit_id" "$edit_id" "$nonwidget"
       else
         # Non-bar plugins switch through Omarchy's own API.
         omarchy plugin enable "$edit_id" >/dev/null 2>&1 || true
@@ -845,7 +873,7 @@ cmd_use() {
         omarchy plugin disable "$edit_id" >/dev/null 2>&1 || true
         omarchy plugin enable "$id" >/dev/null 2>&1 || true
       elif [[ ",$kinds," == *",bar-widget,"* ]]; then
-        switch_entry_safely "$id" "$edit_id" "$id"
+        switch_entry_safely "$id" "$edit_id" "$id" "$nonwidget"
       else
         omarchy plugin disable "$edit_id" >/dev/null 2>&1 || true
         omarchy plugin enable "$id" >/dev/null 2>&1 || true
