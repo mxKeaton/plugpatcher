@@ -1484,42 +1484,49 @@ cmd_heal() {
   write_catalog >/dev/null 2>&1 || true
 }
 
-# Update every plugin: Omarchy's own updater for the plugins you have not
-# patched, then a rebase of each patched plugin onto its upstream.
-cmd_update_all() {
-  # From the panel there is no TTY: reopen in a terminal, where progress and any
-  # prompt can be seen. In a terminal, do the work.
-  if [[ ! ( -t 0 && -t 1 ) ]]; then
-    command -v omarchy-launch-floating-terminal-with-presentation >/dev/null 2>&1 || \
-      die "omarchy-launch-floating-terminal-with-presentation is not available"
-    local self; self="$(readlink -f "${BASH_SOURCE[0]}")"
-    log "opening a terminal to update all plugins"
-    setsid omarchy-launch-floating-terminal-with-presentation "$self update-all" >/dev/null 2>&1 &
-    return 0
-  fi
+# Reopen in a terminal when there is no TTY (e.g. the panel calls us), then run
+# the given subcommand there so progress and prompts are visible.
+run_in_terminal() { # subcommand
+  command -v omarchy-launch-floating-terminal-with-presentation >/dev/null 2>&1 || \
+    die "omarchy-launch-floating-terminal-with-presentation is not available"
+  local self; self="$(readlink -f "${BASH_SOURCE[0]}")"
+  setsid omarchy-launch-floating-terminal-with-presentation "$self $1" >/dev/null 2>&1 &
+}
 
-  # 1. Omarchy's updater touches the pristine installs (git checkouts only).
-  omarchy plugin update --yes || true
-
-  # 2. PlugPatcher rebases each patched plugin onto its upstream and rebuilds
-  #    its clone - one shell restart at the end, not one per plugin.
+# Rebase every patched plugin onto its upstream and rebuild its clone, with one
+# shell restart at the end rather than one per plugin.
+sync_all_editing() {
   write_catalog >/dev/null 2>&1 || true
   local self ids id
   self="$(readlink -f "${BASH_SOURCE[0]}")"
   ids="$(jq -r '(.plugins // [])[]|select(.state=="editing")|.id' "$CATALOG" 2>/dev/null || true)"
   if [[ -z "$ids" ]]; then
-    log "no patched plugins to update"
+    log "no patched plugins to sync"
     return 0
   fi
-  printf '\nUpdating patched plugins:\n'
+  printf '\nSyncing patched plugins:\n'
   export PLUGPATCHER_NO_RESTART=1
   while IFS= read -r id; do
     [[ -n "$id" ]] || continue
-    "$self" sync "$id" || warn "could not update '$id'"
+    "$self" sync "$id" || warn "could not sync '$id'"
   done <<<"$ids"
   unset PLUGPATCHER_NO_RESTART
   schedule_shell_restart
   rescan
+}
+
+# Update everything: Omarchy's updater for the plugins you have not patched,
+# then a rebase of each patched plugin onto its upstream.
+cmd_update_all() {
+  if [[ ! ( -t 0 && -t 1 ) ]]; then run_in_terminal "update-all"; return 0; fi
+  omarchy plugin update --yes || true
+  sync_all_editing
+}
+
+# Sync just the patched plugins.
+cmd_sync_all() {
+  if [[ ! ( -t 0 && -t 1 ) ]]; then run_in_terminal "sync-all"; return 0; fi
+  sync_all_editing
 }
 
 cmd_list() {
@@ -1593,6 +1600,7 @@ Commands:
   config [k] [v]       show or set config (config.json)
   heal                 re-activate adopted clones that went dormant
   update-all           update everything: Omarchy's updater, then rebase your patches
+  sync-all             rebase every patched plugin onto its upstream
   pr-cancel <id>       close the pull request most recently opened for <id>
   source <id>          open the plugin's upstream (source) page in the browser
   open-url <url>       open a URL in the browser
@@ -1624,6 +1632,7 @@ main() {
     config)       cmd_config "$@" ;;
     heal)         cmd_heal "$@" ;;
     update-all)   cmd_update_all "$@" ;;
+    sync-all)     cmd_sync_all "$@" ;;
     pr-cancel|unpr|cancel-pr) cmd_pr_cancel "$@" ;;
     source)       cmd_source "$@" ;;
     open-url)     cmd_open_url "$@" ;;

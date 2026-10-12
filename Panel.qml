@@ -136,6 +136,7 @@ Panel {
     if (a === "use" || a === "switch") return "Switching install…"
     if (a === "open") return "Opening…"
     if (a === "update-all") return "Opening a terminal…"
+    if (a === "sync-all") return "Opening a terminal…"
     if (a === "editor") return "Opening the editor…"
     if (a === "files") return "Opening the folder…"
     return "Working…"
@@ -479,10 +480,19 @@ Panel {
           }
 
           ActionButton {
+            id: syncButton
+            anchors.right: updatePluginsButton.left
+            anchors.rightMargin: Style.space(6)
+            anchors.verticalCenter: parent.verticalCenter
+            text: "Sync"
+            onClicked: root.runAction(["sync-all"])
+          }
+
+          ActionButton {
             id: updatePluginsButton
             anchors.right: parent.right
             anchors.verticalCenter: parent.verticalCenter
-            text: "Update Plugins"
+            text: "Update & Sync"
             onClicked: root.runAction(["update-all"])
           }
         }

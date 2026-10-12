@@ -45,8 +45,9 @@ Each plugin in the panel is a card:
 - **Delete** — remove the original, the patched copy, or both.
 - **switch** — load patched ⇄ original (bar widgets restart the shell, ~3–4 s).
 
-**Update Plugins** updates every installed plugin. `plugpatcher adopt <id>`
-brings an existing plugin repo (with your commits) under PlugPatcher.
+**Update & Sync** runs Omarchy's plugin update and then rebases your patched
+plugins; **Sync** does just the latter. `plugpatcher adopt <id>` brings an
+existing plugin repo (with your commits) under PlugPatcher.
 
 ## Requirements
 
