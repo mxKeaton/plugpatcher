@@ -1412,7 +1412,8 @@ write_catalog() {
   fi
   # Write through a 0600 temp and restore the current mode, so rewriting the
   # catalog never loosens its permissions.
-  local ctmp cmode; ctmp="$(mktemp "$DATA_DIR/.catalog.XXXXXX")"
+  local ctmp cmode=""
+  ctmp="$(mktemp "$DATA_DIR/.catalog.XXXXXX")"
   [[ -f "$CATALOG" ]] && cmode="$(stat -c '%a' "$CATALOG" 2>/dev/null || true)"
   jq -n --argjson plugins "$entries" --arg updatedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
     '{version:1, updatedAt:$updatedAt, plugins:$plugins}' > "$ctmp"
