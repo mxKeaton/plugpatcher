@@ -45,6 +45,12 @@ mkstub omarchy-shell <<'EOF'
 #!/usr/bin/env bash
 exit 0
 EOF
+mkstub systemd-run <<'EOF'
+#!/usr/bin/env bash
+# Never let the smoke test reach the real systemd and restart the user's shell.
+printf 'systemd-run %s\n' "$*" >> "$HOME/.omarchy-calls"
+exit 0
+EOF
 mkstub omarchy-notification-send <<'EOF'
 #!/usr/bin/env bash
 exit 0

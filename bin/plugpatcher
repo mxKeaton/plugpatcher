@@ -156,6 +156,8 @@ rescan() { omarchy-shell -q shell rescanPlugins >/dev/null 2>&1 || true; }
 # would be killed by the shell's own reload). Used to make a regenerated clone
 # actually rebuild in the bar/panel.
 schedule_shell_restart() {
+  # A batch caller (update-all) sets this and restarts once at the end.
+  [[ "${PLUGPATCHER_NO_RESTART:-}" == "1" ]] && return 0
   if command -v systemd-run >/dev/null 2>&1; then
     systemd-run --user --collect --quiet --unit="plugpatcher-restart-$RANDOM" \
       bash -c 'sleep 0.8; omarchy restart shell' >/dev/null 2>&1 || true
@@ -509,8 +511,9 @@ cmd_adopt() {
   if [[ -z "$id" ]]; then
     if [[ -t 0 && -t 1 ]]; then adopt_interactive; return 0; fi
     if command -v omarchy-launch-floating-terminal-with-presentation >/dev/null 2>&1; then
+      local self; self="$(readlink -f "${BASH_SOURCE[0]}")"
       log "opening a terminal to adopt a project"
-      setsid omarchy-launch-floating-terminal-with-presentation "plugpatcher adopt" >/dev/null 2>&1 &
+      setsid omarchy-launch-floating-terminal-with-presentation "$self adopt" >/dev/null 2>&1 &
       return 0
     fi
     die "usage: plugpatcher adopt <plugin-id> [--repo PATH] [--branch NAME] [--upstream URL] [--copy] [--keep-original]"
@@ -578,7 +581,9 @@ cmd_adopt() {
   # The adopted work becomes the branch the clone is generated from.
   git -C "$dest" checkout -q -B local "$branch"
 
-  # The installed original must be the pristine upstream again.
+  # The installed original must be the pristine upstream again — as a git
+  # checkout on the upstream default branch, so `omarchy plugin update` keeps
+  # working on it (a plain copy is invisible to Omarchy's updater).
   if ! $keep_original; then
     local backup="$STATE_DIR/adopt-backup/${id}-$(date +%Y%m%d-%H%M%S)"
     if [[ -e "$pd" ]]; then
@@ -586,9 +591,14 @@ cmd_adopt() {
       mv -- "$pd" "$backup"
       log "backed up the previous install to $backup"
     fi
-    mkdir -p "$pd"
-    git -C "$dest" archive "origin/$upstream_branch" | tar -x -C "$pd"
-    log "restored the original from origin/$upstream_branch"
+    rm -rf "$pd"
+    if git clone -q --branch "$upstream_branch" -- "$upstream" "$pd" 2>/dev/null; then
+      log "restored the original as a git checkout at $upstream_branch"
+    else
+      mkdir -p "$pd"
+      git -C "$dest" archive "origin/$upstream_branch" | tar -x -C "$pd"
+      warn "could not clone '$upstream'; the original is a plain copy and not git-updatable"
+    fi
   elif [[ ! -e "$pd" ]]; then
     warn "the original plugin dir is gone but --keep-original was set"
   fi
@@ -1474,12 +1484,42 @@ cmd_heal() {
   write_catalog >/dev/null 2>&1 || true
 }
 
-# Open a terminal and update every plugin with Omarchy's own updater.
+# Update every plugin: Omarchy's own updater for the plugins you have not
+# patched, then a rebase of each patched plugin onto its upstream.
 cmd_update_all() {
-  command -v omarchy-launch-floating-terminal-with-presentation >/dev/null 2>&1 || \
-    die "omarchy-launch-floating-terminal-with-presentation is not available"
-  log "opening a terminal to update all plugins"
-  setsid omarchy-launch-floating-terminal-with-presentation "omarchy plugin update --yes" >/dev/null 2>&1 &
+  # From the panel there is no TTY: reopen in a terminal, where progress and any
+  # prompt can be seen. In a terminal, do the work.
+  if [[ ! ( -t 0 && -t 1 ) ]]; then
+    command -v omarchy-launch-floating-terminal-with-presentation >/dev/null 2>&1 || \
+      die "omarchy-launch-floating-terminal-with-presentation is not available"
+    local self; self="$(readlink -f "${BASH_SOURCE[0]}")"
+    log "opening a terminal to update all plugins"
+    setsid omarchy-launch-floating-terminal-with-presentation "$self update-all" >/dev/null 2>&1 &
+    return 0
+  fi
+
+  # 1. Omarchy's updater touches the pristine installs (git checkouts only).
+  omarchy plugin update --yes || true
+
+  # 2. PlugPatcher rebases each patched plugin onto its upstream and rebuilds
+  #    its clone - one shell restart at the end, not one per plugin.
+  write_catalog >/dev/null 2>&1 || true
+  local self ids id
+  self="$(readlink -f "${BASH_SOURCE[0]}")"
+  ids="$(jq -r '(.plugins // [])[]|select(.state=="editing")|.id' "$CATALOG" 2>/dev/null || true)"
+  if [[ -z "$ids" ]]; then
+    log "no patched plugins to update"
+    return 0
+  fi
+  printf '\nUpdating patched plugins:\n'
+  export PLUGPATCHER_NO_RESTART=1
+  while IFS= read -r id; do
+    [[ -n "$id" ]] || continue
+    "$self" sync "$id" || warn "could not update '$id'"
+  done <<<"$ids"
+  unset PLUGPATCHER_NO_RESTART
+  schedule_shell_restart
+  rescan
 }
 
 cmd_list() {
@@ -1552,7 +1592,7 @@ Commands:
   editor <id>          open the patch folder in the default editor
   config [k] [v]       show or set config (config.json)
   heal                 re-activate adopted clones that went dormant
-  update-all           open a terminal and run 'omarchy plugin update --yes'
+  update-all           update everything: Omarchy's updater, then rebase your patches
   pr-cancel <id>       close the pull request most recently opened for <id>
   source <id>          open the plugin's upstream (source) page in the browser
   open-url <url>       open a URL in the browser
