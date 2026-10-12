@@ -781,11 +781,15 @@ PY
     while timeout 5 quickshell kill -p "$dir" --any-display >/dev/null 2>&1; do :; done
 
   python3 - "$src" "$clone" "$target" "$cfg" "$nonwidget" <<'PY'
-import json, os, sys
+import json, os, stat, sys, tempfile
 src, clone, target, path, nonwidget = sys.argv[1:6]
 nonwidget = nonwidget == "true"
-try: d = json.load(open(path))
-except Exception: raise SystemExit
+try:
+    with open(path) as f:
+        d = json.load(f)
+    mode = stat.S_IMODE(os.stat(path).st_mode)
+except Exception:
+    raise SystemExit
 pairs = {src, clone}
 def swap(seq):
     out, seen = [], False
@@ -814,9 +818,21 @@ else: d.pop("disabledPlugins", None)
 if restores: d["cloneSourceRestores"] = restores
 else: d.pop("cloneSourceRestores", None)
 
-tmp = path + ".pp.tmp"
-json.dump(d, open(tmp, "w"), indent=2)
-os.replace(tmp, path)
+# Atomic, mode-preserving write: mkstemp is 0600, so the new file is never
+# momentarily world-readable, and the original mode is restored before rename.
+dird = os.path.dirname(path) or "."
+fd, tmp = tempfile.mkstemp(dir=dird, prefix=".shell.json.", suffix=".tmp")
+try:
+    with os.fdopen(fd, "w") as f:
+        json.dump(d, f, indent=2)
+        f.flush()
+        os.fsync(f.fileno())
+    os.chmod(tmp, mode)
+    os.replace(tmp, path)
+except BaseException:
+    try: os.unlink(tmp)
+    except OSError: pass
+    raise
 PY
 
   if [[ -z "${HYPRLAND_INSTANCE_SIGNATURE:-}" ]]; then
@@ -1394,9 +1410,14 @@ write_catalog() {
           })
     ' 2>/dev/null || printf '%s' "$entries")"
   fi
+  # Write through a 0600 temp and restore the current mode, so rewriting the
+  # catalog never loosens its permissions.
+  local ctmp cmode; ctmp="$(mktemp "$DATA_DIR/.catalog.XXXXXX")"
+  [[ -f "$CATALOG" ]] && cmode="$(stat -c '%a' "$CATALOG" 2>/dev/null || true)"
   jq -n --argjson plugins "$entries" --arg updatedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-    '{version:1, updatedAt:$updatedAt, plugins:$plugins}' > "$CATALOG.tmp"
-  mv "$CATALOG.tmp" "$CATALOG"
+    '{version:1, updatedAt:$updatedAt, plugins:$plugins}' > "$ctmp"
+  [[ -n "$cmode" ]] && chmod "$cmode" "$ctmp"
+  mv "$ctmp" "$CATALOG"
   printf '%s' "$entries"
 }
 
