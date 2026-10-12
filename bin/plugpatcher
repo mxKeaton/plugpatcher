@@ -156,8 +156,6 @@ rescan() { omarchy-shell -q shell rescanPlugins >/dev/null 2>&1 || true; }
 # would be killed by the shell's own reload). Used to make a regenerated clone
 # actually rebuild in the bar/panel.
 schedule_shell_restart() {
-  # A batch caller (update-all) sets this and restarts once at the end.
-  [[ "${PLUGPATCHER_NO_RESTART:-}" == "1" ]] && return 0
   if command -v systemd-run >/dev/null 2>&1; then
     systemd-run --user --collect --quiet --unit="plugpatcher-restart-$RANDOM" \
       bash -c 'sleep 0.8; omarchy restart shell' >/dev/null 2>&1 || true
@@ -634,13 +632,11 @@ cmd_adopt() {
 
 # -------------------------------------------------------------------- sync flow
 
-cmd_sync() {
-  local id="${1:-}"
-  [[ -n "$id" ]] || die "usage: plugpatcher sync <plugin-id>"
-  is_setup "$id" || die "'$id' is not set up (run: plugpatcher setup $id)"
-  need git; need jq
-
-  local mf repo branch ub upstream first_party
+# Fetch upstream, rebase the branch onto it, and regenerate the clone. Pure git
+# and files, no shell interaction, so a caller can batch many of these and touch
+# the shell once.
+sync_repo() { # id
+  local id="$1" mf repo branch ub upstream first_party
   mf="$(meta_file "$id")"
   repo="$(require_repo "$id")"
   branch="$(jq -r '.branch' "$mf")"
@@ -659,11 +655,22 @@ cmd_sync() {
   if ! git -C "$repo" "${GIT_ID[@]}" rebase "origin/$ub" >/dev/null 2>&1; then
     git -C "$repo" rebase --abort >/dev/null 2>&1 || true
     notify "PlugPatcher: conflict syncing $id" "Nothing changed. Resolve in $repo"
-    die "cannot auto-merge upstream for '$id'; resolve manually in $repo"
+    return 1
   fi
 
   generate_clone "$id"
   touch_last_sync "$id"
+  notify "PlugPatcher: synced $id" "Rebased on origin/$ub"
+  log "synced '$id'"
+}
+
+cmd_sync() {
+  local id="${1:-}"
+  [[ -n "$id" ]] || die "usage: plugpatcher sync <plugin-id>"
+  is_setup "$id" || die "'$id' is not set up (run: plugpatcher setup $id)"
+  need git; need jq
+
+  sync_repo "$id" || die "cannot auto-merge upstream for '$id'; resolve manually in $(repo_dir "$id")"
   # A regenerated clone does not always rebuild the live widget/panel from a
   # rescan, so restart the shell to make the change visible.
   schedule_shell_restart
@@ -672,8 +679,6 @@ cmd_sync() {
   ensure_active "$id"
   rescan
   write_catalog >/dev/null 2>&1 || true
-  notify "PlugPatcher: synced $id" "Rebased on origin/$ub"
-  log "synced '$id'"
 }
 
 # ---------------------------------------------------------------------- remove
@@ -747,6 +752,49 @@ switch_entry_safely() { # source_id clone_id target_id [nonwidget]
 
 # Detached worker for switch_entry_safely: stop the shell, rewrite the entry,
 # start the shell again.
+# Stop the shell (same primitive as omarchy-restart-shell) and start it again.
+shell_stop() {
+  local dir; dir="$(shell_config_dir)"
+  command -v quickshell >/dev/null 2>&1 && \
+    while timeout 5 quickshell kill -p "$dir" --any-display >/dev/null 2>&1; do :; done
+  return 0
+}
+
+shell_start() {
+  if [[ -z "${HYPRLAND_INSTANCE_SIGNATURE:-}" ]]; then
+    local hd
+    hd="$(find "${XDG_RUNTIME_DIR:-/run/user/$UID}/hypr" -mindepth 1 -maxdepth 1 -type d -printf '%T@ %p\n' 2>/dev/null | sort -n | tail -n 1 | cut -d' ' -f2-)"
+    [[ -n "$hd" ]] && export HYPRLAND_INSTANCE_SIGNATURE="${hd##*/}"
+  fi
+  if command -v hyprctl >/dev/null 2>&1; then
+    hyprctl dispatch 'hl.dsp.exec_cmd("omarchy-launch-shell")' >/dev/null 2>&1 || true
+  else
+    setsid omarchy-launch-shell >/dev/null 2>&1 &
+  fi
+}
+
+# Wait for the shell to answer; fall back to Omarchy's own restart if it does
+# not, so the user is never left without a bar.
+shell_wait_up() {
+  local i ok=""
+  for (( i = 0; i < 60; i++ )); do
+    omarchy-shell shell ping >/dev/null 2>&1 && { ok=1; break; }
+    sleep 0.25
+  done
+  if [[ -z "$ok" ]]; then
+    echo "shell did not come back; falling back to 'omarchy restart shell'"
+    omarchy restart shell >/dev/null 2>&1 || true
+    for (( i = 0; i < 120; i++ )); do
+      omarchy-shell shell ping >/dev/null 2>&1 && { ok=1; break; }
+      sleep 0.25
+    done
+  fi
+  [[ -n "$ok" ]] || return 1
+  # Let the fresh shell finish loading plugins before anything kills it again.
+  sleep 1.5
+  return 0
+}
+
 cmd_switch_core() { # source_id clone_id target_id [nonwidget]
   local src="$1" clone="$2" target="$3" nonwidget="${4:-false}"
   local cfg="${XDG_CONFIG_HOME:-$HOME/.config}/omarchy/shell.json"
@@ -786,9 +834,7 @@ PY
 )"
   if [[ "$needs" != "yes" ]]; then echo "already on $target; nothing to do"; return 0; fi
 
-  local dir; dir="$(shell_config_dir)"
-  command -v quickshell >/dev/null 2>&1 && \
-    while timeout 5 quickshell kill -p "$dir" --any-display >/dev/null 2>&1; do :; done
+  shell_stop
 
   python3 - "$src" "$clone" "$target" "$cfg" "$nonwidget" <<'PY'
 import json, os, stat, sys, tempfile
@@ -845,35 +891,8 @@ except BaseException:
     raise
 PY
 
-  if [[ -z "${HYPRLAND_INSTANCE_SIGNATURE:-}" ]]; then
-    local hd
-    hd="$(find "${XDG_RUNTIME_DIR:-/run/user/$UID}/hypr" -mindepth 1 -maxdepth 1 -type d -printf '%T@ %p\n' 2>/dev/null | sort -n | tail -n 1 | cut -d' ' -f2-)"
-    [[ -n "$hd" ]] && export HYPRLAND_INSTANCE_SIGNATURE="${hd##*/}"
-  fi
-  if command -v hyprctl >/dev/null 2>&1; then
-    hyprctl dispatch 'hl.dsp.exec_cmd("omarchy-launch-shell")' >/dev/null 2>&1 || true
-  else
-    setsid omarchy-launch-shell >/dev/null 2>&1 &
-  fi
-
-  # Make sure the shell actually came back; if not, fall back to Omarchy's own
-  # restart so the user is never left with no bar.
-  local i ok=""
-  for (( i = 0; i < 60; i++ )); do
-    omarchy-shell shell ping >/dev/null 2>&1 && { ok=1; break; }
-    sleep 0.25
-  done
-  if [[ -z "$ok" ]]; then
-    echo "shell did not come back; falling back to 'omarchy restart shell'"
-    omarchy restart shell >/dev/null 2>&1 || true
-    for (( i = 0; i < 120; i++ )); do
-      omarchy-shell shell ping >/dev/null 2>&1 && break
-      sleep 0.25
-    done
-  fi
-  # Let the fresh shell finish loading plugins before the lock is released and
-  # another switch may kill it mid-startup.
-  sleep 1.5
+  shell_start
+  shell_wait_up || true
   write_catalog >/dev/null 2>&1 || true
 }
 
@@ -1493,26 +1512,28 @@ run_in_terminal() { # subcommand
   setsid omarchy-launch-floating-terminal-with-presentation "$self $1" >/dev/null 2>&1 &
 }
 
-# Rebase every patched plugin onto its upstream and rebuild its clone, with one
-# shell restart at the end rather than one per plugin.
+# Rebase every patched plugin onto its upstream and rebuild its clone. The
+# shell is stopped for the whole batch, so it does not reload once per plugin -
+# it comes back a single time at the end.
 sync_all_editing() {
   write_catalog >/dev/null 2>&1 || true
-  local self ids id
-  self="$(readlink -f "${BASH_SOURCE[0]}")"
+  local ids id rc=0
   ids="$(jq -r '(.plugins // [])[]|select(.state=="editing")|.id' "$CATALOG" 2>/dev/null || true)"
   if [[ -z "$ids" ]]; then
     log "no patched plugins to sync"
     return 0
   fi
   printf '\nSyncing patched plugins:\n'
-  export PLUGPATCHER_NO_RESTART=1
+  shell_stop
   while IFS= read -r id; do
     [[ -n "$id" ]] || continue
-    "$self" sync "$id" || warn "could not sync '$id'"
+    sync_repo "$id" || { warn "cannot auto-merge upstream for '$id'; resolve manually in $(repo_dir "$id")"; rc=1; }
   done <<<"$ids"
-  unset PLUGPATCHER_NO_RESTART
-  schedule_shell_restart
+  shell_start
+  shell_wait_up || true
   rescan
+  write_catalog >/dev/null 2>&1 || true
+  return $rc
 }
 
 # Update everything: Omarchy's updater for the plugins you have not patched,
