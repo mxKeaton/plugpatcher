@@ -982,18 +982,53 @@ try: d = json.load(open(path))
 except Exception: print("no"); raise SystemExit
 pairs = {src, clone}
 layout = d.get("bar", {}).get("layout", {}) or {}
+
+def nested_of(entry):
+    # Bar Folder and similar hosts keep their tiles in an entry-local list.
+    if not isinstance(entry, dict): return []
+    w = entry.get("widgets")
+    if isinstance(w, list):
+        return [x if isinstance(x, str)
+                else (x.get("id") if isinstance(x, dict) else None) for x in w]
+    if isinstance(w, dict):
+        return list(w.keys())
+    return []
+
+def placed_ids():
+    # every id the bar layout occupies: top-level entries and nested tiles
+    out = set()
+    for sec in layout:
+        for e in layout.get(sec, []):
+            if isinstance(e, dict) and e.get("id"): out.add(e["id"])
+            out.update(x for x in nested_of(e) if x)
+    return out
+
 def stale(seq):
     return any(isinstance(e, dict) and e.get("id") in pairs and e.get("id") != target for e in seq)
+def placements():
+    # how many times the target sits in the layout (top-level, nested, plugins[])
+    n = 0
+    for sec in layout:
+        for e in layout.get(sec, []):
+            if isinstance(e, dict) and e.get("id") == target: n += 1
+            n += sum(1 for x in nested_of(e) if x == target)
+    if isinstance(d.get("plugins"), list):
+        n += sum(1 for e in d["plugins"] if isinstance(e, dict) and e.get("id") == target)
+    return n
 bad = False
 for sec in layout:
     if stale(layout[sec]): bad = True
 if isinstance(d.get("plugins"), list) and stale(d["plugins"]): bad = True
+# A nested tile still carrying the other id needs the same swap.
+for x in placed_ids():
+    if x in pairs and x != target: bad = True
+# A duplicate placement (both ids present, or the same id twice) needs collapsing.
+if placements() > 1: bad = True
 # A bar widget stranded in plugins[] is not loaded: that needs repairing too.
 if barwidget:
-    in_bar = any(isinstance(e, dict) and e.get("id") == target for sec in layout for e in layout[sec])
     in_plugins = isinstance(d.get("plugins"), list) and any(
         isinstance(e, dict) and e.get("id") == target for e in d["plugins"])
-    if in_plugins and not in_bar: bad = True
+    if in_plugins and target not in placed_ids(): bad = True
 dis = d.get("disabledPlugins", []) or []
 restores = d.get("cloneSourceRestores", []) or []
 if target == src:
@@ -1038,17 +1073,89 @@ for sec in (d.get("bar", {}).get("layout", {}) or {}):
 if isinstance(d.get("plugins"), list):
     d["plugins"] = swap(d["plugins"])
 
-# A bar widget must live in the bar layout: an entry left in plugins[] reads as
-# disabled and the widget never loads. Move it into its section.
+# Bar Folder hosts keep their tiles nested in their own entry (a `widgets` list,
+# with per-widget settings in `widgetSettings`). The shell's registry does not
+# look inside, so a widget placed there has to be swapped here.
+def nested_of(entry):
+    if not isinstance(entry, dict): return []
+    w = entry.get("widgets")
+    if isinstance(w, list):
+        return [x if isinstance(x, str)
+                else (x.get("id") if isinstance(x, dict) else None) for x in w]
+    if isinstance(w, dict):
+        return list(w.keys())
+    return []
+
+def swap_nested(seq):
+    for e in seq:
+        if not isinstance(e, dict): continue
+        w = e.get("widgets")
+        if isinstance(w, list):
+            for i, x in enumerate(w):
+                if isinstance(x, str):
+                    if x in pairs: w[i] = target
+                elif isinstance(x, dict) and x.get("id") in pairs:
+                    x["id"] = target
+        elif isinstance(w, dict):
+            for k in list(w.keys()):
+                if k in pairs: w[target] = w.pop(k)
+        ws = e.get("widgetSettings")
+        if isinstance(ws, dict):
+            for k in list(ws.keys()):
+                if k in pairs: ws[target] = ws.pop(k)
+
+layout = d.get("bar", {}).get("layout", {}) or {}
+for sec in layout:
+    swap_nested(layout.get(sec, []))
+
+# A bar widget must live in the bar layout (top-level or nested in a host): an
+# entry left in plugins[] reads as disabled and the widget never loads.
 if barwidget:
     layout = d.setdefault("bar", {}).setdefault("layout", {})
-    in_bar = any(isinstance(e, dict) and e.get("id") == target
-                 for sec in layout for e in layout.get(sec, []))
-    if not in_bar:
+    placed = set()
+    for sec in layout:
+        for e in layout.get(sec, []):
+            if isinstance(e, dict) and e.get("id"): placed.add(e["id"])
+            placed.update(x for x in nested_of(e) if x)
+    if target not in placed:
         if isinstance(d.get("plugins"), list):
             d["plugins"] = [e for e in d["plugins"]
                              if not (isinstance(e, dict) and e.get("id") == target)]
         layout.setdefault(bsection, []).append({"id": target})
+
+# Keep exactly one placement for the target. Both ids can end up present at once
+# (the original was nested in a host when the clone was enabled), and swapping
+# each occurrence would multiply it. A host (folder) placement is an explicit
+# choice, so it wins over a top-level duplicate.
+def tile_id(x):
+    return x if isinstance(x, str) else (x.get("id") if isinstance(x, dict) else None)
+
+host_kept = 0
+for sec in layout:
+    for e in layout.get(sec, []):
+        w = e.get("widgets") if isinstance(e, dict) else None
+        if not isinstance(w, list): continue
+        out = []
+        for x in w:
+            if tile_id(x) == target:
+                if host_kept: continue
+                host_kept += 1
+            out.append(x)
+        w[:] = out
+
+top_kept = 0
+for sec in layout:
+    out = []
+    for e in layout.get(sec, []):
+        if isinstance(e, dict) and e.get("id") == target:
+            if host_kept or top_kept: continue
+            top_kept += 1
+        out.append(e)
+    layout[sec] = out
+
+if isinstance(d.get("plugins"), list) and host_kept:
+    d["plugins"] = [e for e in d["plugins"]
+                    if not (isinstance(e, dict) and e.get("id") == target)]
 
 # Omarchy disables the source in disabledPlugins (and records a restore) while
 # a clone with non-bar-widget kinds is active. Undo/redo that with the flip.
@@ -1547,11 +1654,50 @@ cmd_settings() {
 
 # ------------------------------------------------------------------ list/status
 
+# Path to the shell's config.
+shell_json() { printf '%s/omarchy/shell.json' "${XDG_CONFIG_HOME:-$HOME/.config}"; }
+
 enabled_map() {
   # NOTE: no -q here — it suppresses stdout, which would make every plugin look
   # disabled (and send heal into a re-enable loop).
-  omarchy-shell shell listPlugins 2>/dev/null |
-    jq -r '.[] | "\(.id)\t\(.enabled)\t\(.active)"' 2>/dev/null || true
+  local reg
+  reg="$(omarchy-shell shell listPlugins 2>/dev/null |
+    jq -r '.[] | "\(.id)\t\(.enabled)\t\(.active)"' 2>/dev/null || true)"
+
+  # A widget hosted by another plugin (Bar Folder keeps its tiles in an entry's
+  # `widgets` array) is loaded by that host, but the registry only counts
+  # top-level entries — it reports those as disabled. Treat anything placed in
+  # shell.json as enabled, so the badge, the toggle and heal agree with what is
+  # actually on screen.
+  python3 - "$(shell_json)" "$reg" <<'PY'
+import json, sys
+path = sys.argv[1]
+reg = sys.argv[2] if len(sys.argv) > 2 else ""
+state = {}
+for line in reg.splitlines():
+    parts = line.split("\t")
+    if len(parts) == 3: state[parts[0]] = [parts[1], parts[2]]
+try: d = json.load(open(path))
+except Exception: d = {}
+placed = []
+def add(x):
+    if isinstance(x, str) and x: placed.append(x)
+    elif isinstance(x, dict) and x.get("id"): placed.append(x["id"])
+for sec in (d.get("bar", {}).get("layout", {}) or {}):
+    for e in (d["bar"]["layout"].get(sec, []) or []):
+        add(e)
+        w = e.get("widgets") if isinstance(e, dict) else None
+        if isinstance(w, list):
+            for x in w: add(x)
+        elif isinstance(w, dict):
+            for k in w: placed.append(k)
+for e in (d.get("plugins", []) or []): add(e)
+for i in placed:
+    if i in state: state[i][0] = "true"
+    else: state[i] = ["true", "true"]
+for k, v in state.items():
+    print(f"{k}\t{v[0]}\t{v[1]}")
+PY
 }
 
 write_catalog() {
