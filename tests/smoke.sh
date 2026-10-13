@@ -106,7 +106,7 @@ grep -q "line two (edited)" "$CLONE/Panel.qml" || fail "local edit lost after sy
 [[ -f "$CLONE/Other.qml" ]] || fail "upstream change not merged into clone"
 pass "sync rebased local edit on top of upstream and regenerated clone"
 
-echo "== sync conflict aborts cleanly =="
+echo "== sync conflict pauses and is recorded =="
 printf 'conflicting upstream\n' > "$T/seed/Panel.qml"
 git -C "$T/seed" add -A && git -C "$T/seed" commit -qm "conflicting upstream change"
 git -C "$T/seed" push -q origin master
@@ -114,8 +114,20 @@ printf 'conflicting local\n' > "$HOME/.local/share/plugpatcher/test.plugin/Panel
 git -C "$HOME/.local/share/plugpatcher/test.plugin" add -A
 git -C "$HOME/.local/share/plugpatcher/test.plugin" -c user.email=t@t -c user.name=t commit -qm "conflicting local"
 if run sync test.plugin >/dev/null 2>&1; then fail "sync should have reported a conflict"; fi
-[[ "$(git -C "$HOME/.local/share/plugpatcher/test.plugin" status --porcelain | wc -l)" -eq 0 ]] || fail "repo left dirty after aborted sync"
-pass "sync aborted on conflict and left the repo clean"
+[[ -d "$HOME/.local/share/plugpatcher/test.plugin/.git/rebase-merge" ]] || fail "conflict did not pause the rebase"
+[[ "$(jq -r '.conflict.files[0]' "$HOME/.local/share/plugpatcher/test.plugin.json")" == "Panel.qml" ]] \
+  || fail "conflict not recorded in the metadata"
+pass "sync paused on the conflict and recorded it"
+
+echo "== resolve refuses while unresolved, abort clears it =="
+if run resolve test.plugin >/dev/null 2>&1; then fail "resolve should refuse while files are unresolved"; fi
+run abort test.plugin >/dev/null 2>&1 || fail "abort exited non-zero"
+[[ -d "$HOME/.local/share/plugpatcher/test.plugin/.git/rebase-merge" ]] && fail "abort left the rebase in place"
+[[ "$(jq -r '.conflict // "none"' "$HOME/.local/share/plugpatcher/test.plugin.json")" == "none" ]] \
+  || fail "abort did not clear the conflict record"
+[[ "$(git -C "$HOME/.local/share/plugpatcher/test.plugin" status --porcelain | wc -l)" -eq 0 ]] \
+  || fail "repo left dirty after abort"
+pass "abort dropped the conflicted rebase and left the repo clean"
 
 echo "== remove =="
 run remove test.plugin >/dev/null 2>&1 || fail "remove exited non-zero"
