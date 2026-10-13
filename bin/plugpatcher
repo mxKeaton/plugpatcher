@@ -891,8 +891,8 @@ shell_config_dir() {
 # Flip a plugin's config entry between its source and clone id while the shell is
 # stopped, then start the shell again. A live id flip makes the bar's Repeater
 # rebuild, which can segfault quickshell, so the edit happens with it down.
-switch_entry_safely() { # source_id clone_id target_id [nonwidget]
-  local src="$1" clone="$2" target="$3" nonwidget="${4:-false}"
+switch_entry_safely() { # source_id clone_id target_id [nonwidget] [barwidget] [section]
+  local src="$1" clone="$2" target="$3" nonwidget="${4:-false}" barwidget="${5:-false}" bsection="${6:-center}"
   local cfg="${XDG_CONFIG_HOME:-$HOME/.config}/omarchy/shell.json"
   [[ -f "$cfg" ]] || return 0
 
@@ -907,9 +907,9 @@ switch_entry_safely() { # source_id clone_id target_id [nonwidget]
       --setenv="XDG_CONFIG_HOME=${XDG_CONFIG_HOME:-$HOME/.config}" \
       --setenv="XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-/run/user/$UID}" \
       --setenv="HYPRLAND_INSTANCE_SIGNATURE=${HYPRLAND_INSTANCE_SIGNATURE:-}" \
-      "$self" __switch "$src" "$clone" "$target" "$nonwidget" >/dev/null 2>&1 &
+      "$self" __switch "$src" "$clone" "$target" "$nonwidget" "$barwidget" "$bsection" >/dev/null 2>&1 &
   else
-    setsid "$self" __switch "$src" "$clone" "$target" "$nonwidget" </dev/null >/dev/null 2>&1 &
+    setsid "$self" __switch "$src" "$clone" "$target" "$nonwidget" "$barwidget" "$bsection" </dev/null >/dev/null 2>&1 &
   fi
 }
 
@@ -958,8 +958,8 @@ shell_wait_up() {
   return 0
 }
 
-cmd_switch_core() { # source_id clone_id target_id [nonwidget]
-  local src="$1" clone="$2" target="$3" nonwidget="${4:-false}"
+cmd_switch_core() { # source_id clone_id target_id [nonwidget] [barwidget] [section]
+  local src="$1" clone="$2" target="$3" nonwidget="${4:-false}" barwidget="${5:-false}" bsection="${6:-center}"
   local cfg="${XDG_CONFIG_HOME:-$HOME/.config}/omarchy/shell.json"
 
   mkdir -p "$STATE_DIR"
@@ -973,19 +973,27 @@ cmd_switch_core() { # source_id clone_id target_id [nonwidget]
 
   # Under the lock: nothing to do means no shell restart at all.
   local needs
-  needs="$(python3 - "$src" "$clone" "$target" "$cfg" "$nonwidget" <<'PY'
+  needs="$(python3 - "$src" "$clone" "$target" "$cfg" "$nonwidget" "$barwidget" <<'PY'
 import json, sys
-src, clone, target, path, nonwidget = sys.argv[1:6]
+src, clone, target, path, nonwidget, barwidget = sys.argv[1:7]
 nonwidget = nonwidget == "true"
+barwidget = barwidget == "true"
 try: d = json.load(open(path))
 except Exception: print("no"); raise SystemExit
 pairs = {src, clone}
+layout = d.get("bar", {}).get("layout", {}) or {}
 def stale(seq):
     return any(isinstance(e, dict) and e.get("id") in pairs and e.get("id") != target for e in seq)
 bad = False
-for sec in (d.get("bar", {}).get("layout", {}) or {}):
-    if stale(d["bar"]["layout"][sec]): bad = True
+for sec in layout:
+    if stale(layout[sec]): bad = True
 if isinstance(d.get("plugins"), list) and stale(d["plugins"]): bad = True
+# A bar widget stranded in plugins[] is not loaded: that needs repairing too.
+if barwidget:
+    in_bar = any(isinstance(e, dict) and e.get("id") == target for sec in layout for e in layout[sec])
+    in_plugins = isinstance(d.get("plugins"), list) and any(
+        isinstance(e, dict) and e.get("id") == target for e in d["plugins"])
+    if in_plugins and not in_bar: bad = True
 dis = d.get("disabledPlugins", []) or []
 restores = d.get("cloneSourceRestores", []) or []
 if target == src:
@@ -1002,10 +1010,12 @@ PY
   # Only rewrite the config when something actually needs to move. Either way
   # the shell is restarted below, so a switch also acts as a reload.
   if [[ "$needs" == "yes" ]]; then
-  python3 - "$src" "$clone" "$target" "$cfg" "$nonwidget" <<'PY'
+  python3 - "$src" "$clone" "$target" "$cfg" "$nonwidget" "$barwidget" "$bsection" <<'PY'
 import json, os, stat, sys, tempfile
-src, clone, target, path, nonwidget = sys.argv[1:6]
+src, clone, target, path, nonwidget, barwidget, bsection = sys.argv[1:8]
 nonwidget = nonwidget == "true"
+barwidget = barwidget == "true"
+if bsection not in ("left", "center", "right"): bsection = "center"
 try:
     with open(path) as f:
         d = json.load(f)
@@ -1027,6 +1037,18 @@ for sec in (d.get("bar", {}).get("layout", {}) or {}):
     d["bar"]["layout"][sec] = swap(d["bar"]["layout"][sec])
 if isinstance(d.get("plugins"), list):
     d["plugins"] = swap(d["plugins"])
+
+# A bar widget must live in the bar layout: an entry left in plugins[] reads as
+# disabled and the widget never loads. Move it into its section.
+if barwidget:
+    layout = d.setdefault("bar", {}).setdefault("layout", {})
+    in_bar = any(isinstance(e, dict) and e.get("id") == target
+                 for sec in layout for e in layout.get(sec, []))
+    if not in_bar:
+        if isinstance(d.get("plugins"), list):
+            d["plugins"] = [e for e in d["plugins"]
+                             if not (isinstance(e, dict) and e.get("id") == target)]
+        layout.setdefault(bsection, []).append({"id": target})
 
 # Omarchy disables the source in disabledPlugins (and records a restore) while
 # a clone with non-bar-widget kinds is active. Undo/redo that with the flip.
@@ -1077,6 +1099,18 @@ cmd_use() {
   local -a _ka=(); IFS=, read -ra _ka <<< "$kinds"
   for k in "${_ka[@]}"; do [[ -n "$k" && "$k" != "bar-widget" ]] && nonwidget=true; done
 
+  # A bar widget's entry belongs in the bar layout; the switch repairs one that
+  # was stranded in the non-bar plugins list (where the shell treats it as off).
+  local barwidget=false bsection="center"
+  if [[ ",$kinds," == *",bar-widget,"* ]]; then
+    barwidget=true
+    local mp; mp="$(manifest_path "$id" 2>/dev/null || true)"
+    if [[ -n "$mp" && -f "$mp" ]]; then
+      local s; s="$(jq -r '.barWidget.defaultSection // empty' "$mp" 2>/dev/null || true)"
+      [[ "$s" == "left" || "$s" == "center" || "$s" == "right" ]] && bsection="$s"
+    fi
+  fi
+
   # 'toggle' decides from the live enabled state, not a cached catalog, so a
   # stale button label cannot switch the wrong way.
   if [[ "$want" == "toggle" ]]; then
@@ -1097,7 +1131,7 @@ cmd_use() {
       elif [[ ",$kinds," == *",bar-widget,"* ]]; then
         # A bar widget reload rebuilds the bar's Repeater, which can crash the
         # shell, so this one goes through the stop/rewrite/start path.
-        switch_entry_safely "$id" "$edit_id" "$edit_id" "$nonwidget"
+        switch_entry_safely "$id" "$edit_id" "$edit_id" "$nonwidget" "$barwidget" "$bsection"
       else
         # Non-bar plugins switch through Omarchy's own API.
         omarchy plugin enable "$edit_id" >/dev/null 2>&1 || true
@@ -1109,7 +1143,7 @@ cmd_use() {
         omarchy plugin disable "$edit_id" >/dev/null 2>&1 || true
         omarchy plugin enable "$id" >/dev/null 2>&1 || true
       elif [[ ",$kinds," == *",bar-widget,"* ]]; then
-        switch_entry_safely "$id" "$edit_id" "$id" "$nonwidget"
+        switch_entry_safely "$id" "$edit_id" "$id" "$nonwidget" "$barwidget" "$bsection"
       else
         omarchy plugin disable "$edit_id" >/dev/null 2>&1 || true
         omarchy plugin enable "$id" >/dev/null 2>&1 || true
