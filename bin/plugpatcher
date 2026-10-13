@@ -682,13 +682,24 @@ require_no_conflict() { # id
   fi
 }
 
-# The merge view to offer: nvim when present (it is Omarchy's default editor),
-# otherwise whatever the user configured.
-merge_tool() {
-  if command -v nvim >/dev/null 2>&1; then echo nvimdiff; return; fi
-  local t; t="$(git config --get merge.tool 2>/dev/null || true)"
-  [[ -n "$t" ]] && { echo "$t"; return; }
-  echo vimdiff
+# lazygit is the merge UI: it shows both sides per hunk and can continue or
+# abort the rebase itself. Offer to install it when it is missing.
+lazygit_install_cmd() { printf 'omarchy pkg add lazygit'; }
+
+require_lazygit() {
+  command -v lazygit >/dev/null 2>&1 && return 0
+  local cmd; cmd="$(lazygit_install_cmd)"
+  if [[ -t 0 && -t 1 ]]; then
+    local answer
+    printf 'Resolving this conflict needs lazygit, which is not installed.\nRun "%s" now? [y/N] ' "$cmd" >&2
+    read -r answer || true
+    if [[ "$answer" =~ ^[Yy]$ ]]; then
+      bash -lc "$cmd" || die "could not install lazygit"
+      command -v lazygit >/dev/null 2>&1 || die "lazygit is still not installed"
+      return 0
+    fi
+  fi
+  die "lazygit is not installed; install it with: $cmd"
 }
 
 # Fetch upstream, rebase the branch onto it, and regenerate the clone. Pure git
@@ -773,22 +784,37 @@ cmd_sync() {
   write_catalog >/dev/null 2>&1 || true
 }
 
-# Open the 3-way merge view for a paused conflict (nvim by default).
+# Open the conflict in lazygit, which resolves it in place and can continue the
+# rebase itself. When it does, the clone is rebuilt straight away.
 cmd_mergetool() { # id
   local id="${1:-}"
   [[ -n "$id" ]] || die "usage: plugpatcher mergetool <plugin-id>"
   is_setup "$id" || die "'$id' is not set up"
-  local repo tool; repo="$(require_repo "$id")"
+  local repo; repo="$(require_repo "$id")"
   rebase_in_progress "$repo" || die "'$id' has no conflict in progress"
+  # From the panel there is no TTY: reopen in a terminal, where lazygit (and the
+  # install prompt, if it is missing) can run.
   if [[ ! ( -t 0 && -t 1 ) ]]; then run_in_terminal "mergetool $id"; return 0; fi
-  tool="$(merge_tool)"
-  need "$tool"
-  log "opening $tool for '$id'"
-  ( cd "$repo" && git mergetool --tool="$tool" )
+  require_lazygit
+  log "opening lazygit for '$id'"
+  ( cd "$repo" && lazygit ) || true
+
+  if rebase_in_progress "$repo"; then
+    warn "the rebase is still paused; finish it in lazygit, or run 'plugpatcher resolve $id' / 'plugpatcher abort $id'"
+    return 0
+  fi
+  # lazygit continued (or aborted) the rebase for us.
+  clear_conflict "$id"
   if [[ -z "$(conflicted_files "$repo")" ]]; then
-    log "all conflicts staged; run 'plugpatcher resolve $id' to finish"
-  else
-    warn "still unresolved: $(conflicted_files "$repo" | tr '\n' ' ')"
+    local ub; ub="$(jq -r '.upstreamBranch' "$(meta_file "$id")")"
+    generate_clone "$id"
+    touch_last_sync "$id"
+    schedule_shell_restart
+    ensure_active "$id"
+    rescan
+    write_catalog >/dev/null 2>&1 || true
+    notify "PlugPatcher: resolved $id" "Rebased with lazygit"
+    log "resolved '$id' with lazygit (on origin/$ub)"
   fi
 }
 
@@ -2082,7 +2108,7 @@ Commands:
   reload [id]          restart the shell so changed plugin files are reloaded
   resolve <id>         finish a paused conflict and rebuild the clone
   abort <id>           drop the paused conflict, keeping your version
-  mergetool <id>       open the 3-way merge view for a conflicted plugin
+  mergetool <id>       open lazygit to resolve a conflicted plugin (offers to install it)
   pr-cancel <id>       close the pull request most recently opened for <id>
   source <id>          open the plugin's upstream (source) page in the browser
   open-url <url>       open a URL in the browser

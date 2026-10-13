@@ -47,6 +47,9 @@ The clone carries `omarchy.clonedFrom = <id>`, so the shell:
 | `plugpatcher adopt [id] [--repo PATH] [--branch B] [--upstream URL]` | bring an existing git working copy under PlugPatcher, keeping its history; makes `local` the patched branch and resets the installed original to pristine (no arg = interactive wizard) |
 | `plugpatcher sync <id>` | `git fetch` upstream, rebase your branch, regenerate the clone; aborts on conflict |
 | `plugpatcher reload [id]` | restart the shell so plugin files changed on disk reload (the shell's own watcher is unreliable) |
+| `plugpatcher mergetool <id>` | open a paused conflict in lazygit (offers to install it); rebuilds the clone if lazygit finishes the rebase |
+| `plugpatcher resolve <id>` | finish a paused rebase (refuses while files are unresolved) and rebuild the clone |
+| `plugpatcher abort <id>` | drop a paused rebase, keeping your version |
 | `plugpatcher pr <id> [ai|manual]` | push your branch and open a PR: `ai` writes the title/description, `manual` opens GitHub's form (one branch per patch) |
 | `plugpatcher pr-cancel <id>` | close the PR most recently opened for `<id>` (also `unpr`) |
 | `plugpatcher source <id>` | open the plugin's upstream (source) page in the browser |
