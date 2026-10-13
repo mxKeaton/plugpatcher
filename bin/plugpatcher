@@ -632,9 +632,69 @@ cmd_adopt() {
 
 # -------------------------------------------------------------------- sync flow
 
+# ------------------------------------------------------------- conflict state
+
+# A rebase that stopped on a conflict leaves one of these behind.
+rebase_in_progress() { # repo
+  [[ -d "$1/.git/rebase-merge" || -d "$1/.git/rebase-apply" ]]
+}
+
+# Unmerged paths, one per line.
+conflicted_files() { # repo
+  git -C "$1" diff --name-only --diff-filter=U 2>/dev/null || true
+}
+
+# Remember a paused conflict in the plugin's metadata (the catalog projects it).
+record_conflict() { # id
+  local mf; mf="$(meta_file "$1")"
+  [[ -f "$mf" ]] || return 0
+  local repo ub files sha tmp
+  repo="$(repo_dir "$1")"
+  ub="$(jq -r '.upstreamBranch' "$mf" 2>/dev/null || true)"
+  files="$(conflicted_files "$repo" | jq -R -s 'split("\n") | map(select(length > 0))' 2>/dev/null || echo '[]')"
+  sha="$(git -C "$repo" rev-parse "origin/$ub" 2>/dev/null || true)"
+  tmp="$(mktemp)"
+  if jq --argjson files "$files" --arg sha "$sha" --argjson at "$(date +%s)" \
+       '.conflict = {at:$at, upstream:$sha, files:$files}' "$mf" > "$tmp"; then
+    mv "$tmp" "$mf"
+  else
+    rm -f "$tmp"
+  fi
+}
+
+clear_conflict() { # id
+  local mf; mf="$(meta_file "$1")"
+  [[ -f "$mf" ]] || return 0
+  local tmp; tmp="$(mktemp)"
+  if jq 'del(.conflict)' "$mf" > "$tmp"; then mv "$tmp" "$mf"; else rm -f "$tmp"; fi
+}
+
+conflict_recorded() { # id
+  local mf; mf="$(meta_file "$1")"; [[ -f "$mf" ]] || return 1
+  [[ -n "$(jq -r '.conflict // empty' "$mf" 2>/dev/null)" ]]
+}
+
+# Refuse the commands that would act on a half-rebased repo.
+require_no_conflict() { # id
+  local repo; repo="$(repo_dir "$1")"
+  if rebase_in_progress "$repo" || conflict_recorded "$1"; then
+    die "'$1' has an unresolved conflict; 'plugpatcher resolve $1' or 'plugpatcher abort $1' first"
+  fi
+}
+
+# The merge view to offer: nvim when present (it is Omarchy's default editor),
+# otherwise whatever the user configured.
+merge_tool() {
+  if command -v nvim >/dev/null 2>&1; then echo nvimdiff; return; fi
+  local t; t="$(git config --get merge.tool 2>/dev/null || true)"
+  [[ -n "$t" ]] && { echo "$t"; return; }
+  echo vimdiff
+}
+
 # Fetch upstream, rebase the branch onto it, and regenerate the clone. Pure git
 # and files, no shell interaction, so a caller can batch many of these and touch
-# the shell once.
+# the shell once. On a real conflict the rebase is left paused (resolvable in
+# place) and recorded.
 sync_repo() { # id
   local id="$1" mf repo branch ub upstream first_party
   mf="$(meta_file "$id")"
@@ -651,13 +711,40 @@ sync_repo() { # id
     return 0
   fi
 
-  git -C "$repo" fetch -q origin
-  if ! git -C "$repo" "${GIT_ID[@]}" rebase "origin/$ub" >/dev/null 2>&1; then
-    git -C "$repo" rebase --abort >/dev/null 2>&1 || true
-    notify "PlugPatcher: conflict syncing $id" "Nothing changed. Resolve in $repo"
+  # Finish (or drop) an earlier conflict before starting another rebase.
+  if rebase_in_progress "$repo"; then
+    warn "'$id' still has an unresolved conflict; 'plugpatcher resolve $id' or 'plugpatcher abort $id'"
     return 1
   fi
 
+  # Uncommitted edits make `git rebase` refuse; capture them first so the sync
+  # runs from a clean tree and the work is kept.
+  if [[ -n "$(git -C "$repo" status --porcelain)" ]]; then
+    git -C "$repo" add -A
+    git -C "$repo" "${GIT_ID[@]}" commit -qm "PlugPatcher: capture uncommitted edits" >/dev/null 2>&1 || true
+    log "captured uncommitted edits in '$id' before syncing"
+  fi
+
+  if ! git -C "$repo" fetch -q origin; then
+    warn "cannot fetch upstream for '$id'"
+    return 1
+  fi
+
+  if ! git -C "$repo" "${GIT_ID[@]}" rebase "origin/$ub" >/dev/null 2>&1; then
+    if rebase_in_progress "$repo"; then
+      # A real conflict: leave it paused so it can be resolved in place, and
+      # leave the loaded clone at its last good version.
+      record_conflict "$id"
+      local n; n="$(conflicted_files "$repo" | grep -c . || true)"
+      notify "PlugPatcher: conflict in $id" "$n file(s) - resolve in PlugPatcher"
+      return 1
+    fi
+    git -C "$repo" rebase --abort >/dev/null 2>&1 || true
+    warn "cannot rebase '$id' onto origin/$ub"
+    return 1
+  fi
+
+  clear_conflict "$id"
   generate_clone "$id"
   touch_last_sync "$id"
   notify "PlugPatcher: synced $id" "Rebased on origin/$ub"
@@ -670,7 +757,12 @@ cmd_sync() {
   is_setup "$id" || die "'$id' is not set up (run: plugpatcher setup $id)"
   need git; need jq
 
-  sync_repo "$id" || die "cannot auto-merge upstream for '$id'; resolve manually in $(repo_dir "$id")"
+  if ! sync_repo "$id"; then
+    if rebase_in_progress "$(repo_dir "$id")"; then
+      die "conflict in '$id'; run 'plugpatcher resolve $id' (or 'plugpatcher abort $id')"
+    fi
+    die "cannot sync '$id'"
+  fi
   # A regenerated clone does not always rebuild the live widget/panel from a
   # rescan, so restart the shell to make the change visible.
   schedule_shell_restart
@@ -681,12 +773,83 @@ cmd_sync() {
   write_catalog >/dev/null 2>&1 || true
 }
 
+# Open the 3-way merge view for a paused conflict (nvim by default).
+cmd_mergetool() { # id
+  local id="${1:-}"
+  [[ -n "$id" ]] || die "usage: plugpatcher mergetool <plugin-id>"
+  is_setup "$id" || die "'$id' is not set up"
+  local repo tool; repo="$(require_repo "$id")"
+  rebase_in_progress "$repo" || die "'$id' has no conflict in progress"
+  if [[ ! ( -t 0 && -t 1 ) ]]; then run_in_terminal "mergetool $id"; return 0; fi
+  tool="$(merge_tool)"
+  need "$tool"
+  log "opening $tool for '$id'"
+  ( cd "$repo" && git mergetool --tool="$tool" )
+  if [[ -z "$(conflicted_files "$repo")" ]]; then
+    log "all conflicts staged; run 'plugpatcher resolve $id' to finish"
+  else
+    warn "still unresolved: $(conflicted_files "$repo" | tr '\n' ' ')"
+  fi
+}
+
+# Finish a paused rebase: every file resolved, then continue it.
+cmd_resolve() { # id
+  local id="${1:-}"
+  [[ -n "$id" ]] || die "usage: plugpatcher resolve <plugin-id>"
+  is_setup "$id" || die "'$id' is not set up"
+  need git; need jq
+  local repo mf ub; repo="$(require_repo "$id")"; mf="$(meta_file "$id")"
+  ub="$(jq -r '.upstreamBranch' "$mf")"
+  rebase_in_progress "$repo" || die "'$id' has no conflict to resolve"
+
+  local left; left="$(conflicted_files "$repo")"
+  [[ -z "$left" ]] || die "still unresolved in '$id': $(tr '\n' ' ' <<<"$left")"
+
+  git -C "$repo" add -A
+  # core.editor=true keeps `rebase --continue` from opening an editor.
+  if ! git -C "$repo" "${GIT_ID[@]}" -c core.editor=true rebase --continue >/dev/null 2>&1; then
+    if rebase_in_progress "$repo"; then
+      record_conflict "$id"
+      die "another conflict appeared in '$id'; resolve it and run 'plugpatcher resolve $id' again"
+    fi
+    git -C "$repo" rebase --abort >/dev/null 2>&1 || true
+    die "could not continue the rebase for '$id'"
+  fi
+
+  clear_conflict "$id"
+  generate_clone "$id"
+  touch_last_sync "$id"
+  schedule_shell_restart
+  ensure_active "$id"
+  rescan
+  write_catalog >/dev/null 2>&1 || true
+  notify "PlugPatcher: resolved $id" "Rebased on origin/$ub"
+  log "resolved '$id'"
+}
+
+# Drop a paused rebase and keep the version you had.
+cmd_abort() { # id
+  local id="${1:-}"
+  [[ -n "$id" ]] || die "usage: plugpatcher abort <plugin-id>"
+  is_setup "$id" || die "'$id' is not set up"
+  need git; need jq
+  local repo; repo="$(require_repo "$id")"
+  rebase_in_progress "$repo" || die "'$id' has no conflict to abort"
+  git -C "$repo" rebase --abort >/dev/null 2>&1 || die "could not abort the rebase for '$id'"
+  clear_conflict "$id"
+  rescan
+  write_catalog >/dev/null 2>&1 || true
+  notify "PlugPatcher: conflict dropped for $id" "Your version is unchanged"
+  log "aborted the conflict for '$id'"
+}
+
 # ---------------------------------------------------------------------- remove
 
 cmd_revert() {
   local id="${1:-}" keep_repo="${2:-}"
   [[ -n "$id" ]] || die "usage: plugpatcher revert <plugin-id>"
   is_setup "$id" || die "'$id' is not set up"
+  require_no_conflict "$id"
   local mf edit_id kinds
   mf="$(meta_file "$id")"
   edit_id="$(jq -r '.editId' "$mf")"
@@ -1046,6 +1209,7 @@ cmd_pr() {
   local id="${1:-}" mode="${2:-ai}"
   [[ -n "$id" ]] || die "usage: plugpatcher pr <plugin-id> [ai|manual]"
   is_setup "$id" || die "'$id' is not set up"
+  require_no_conflict "$id"
   case "$mode" in ai|manual) ;; *) die "unknown pr mode '$mode' (use ai or manual)" ;; esac
   need git; need jq
   local mf repo branch ub upstream slug
@@ -1357,7 +1521,7 @@ write_catalog() {
   local enabled; enabled="$(enabled_map)"
   local entries="[]"
   if command -v omarchy-plugin-catalog >/dev/null 2>&1; then
-    local line id name kinds manifest_path generated mf state edit_id upstream branch ub repo_path last_edit last_update
+    local line id name kinds manifest_path generated mf state edit_id upstream branch ub repo_path last_edit last_update conflict
     while IFS= read -r line; do
       [[ -n "$line" ]] || continue
       id="$(jq -r '.id' <<<"$line")"
@@ -1385,9 +1549,15 @@ write_catalog() {
         [[ -n "$last_edit" ]] || last_edit="$(git -C "$repo_path" log -1 --format=%ct "$branch" 2>/dev/null || true)"
         # Last time sync pulled upstream.
         last_update="$(jq -r '.lastSync // empty' "$mf" 2>/dev/null || true)"
+        # A paused conflict (rebase still in progress) is surfaced to the panel.
+        if rebase_in_progress "$repo_path"; then
+          conflict="$(jq -c '.conflict // null' "$mf" 2>/dev/null || echo null)"
+        else
+          conflict="null"
+        fi
       else
         state="original"; edit_id=""; upstream=""; branch=""
-        last_edit=""; last_update=""
+        last_edit=""; last_update=""; conflict="null"
         # A source URL so untouched plugins can show a Source button too.
         local pdir; pdir="$(plugin_dir "$id")"
         [[ -d "$pdir/.git" ]] && src_url="$(git -C "$pdir" remote get-url origin 2>/dev/null || true)"
@@ -1398,12 +1568,13 @@ write_catalog() {
       entries="$(jq -n --argjson e "$entries" \
         --arg id "$id" --arg name "$name" --argjson kinds "$kinds" \
         --arg state "$state" --arg editId "$edit_id" --arg upstream "$upstream" --arg branch "$branch" \
-        --arg source "$src_url" \
+        --arg source "$src_url" --argjson conflict "${conflict:-null}" \
         --argjson lastEdit "${last_edit:-null}" --argjson lastUpdate "${last_update:-null}" '
         $e + [{id:$id, name:$name, kinds:$kinds, state:$state,
                editId: (if $editId == "" then null else $editId end),
                upstream: (if $upstream == "" then null else $upstream end),
                source: (if $source == "" then null else $source end),
+               conflict: $conflict,
                branch: (if $branch == "" then null else $branch end),
                lastEdit: $lastEdit, lastUpdate: $lastUpdate}]')"
     done < <(omarchy-plugin-catalog 2>/dev/null | jq -c '.[]' 2>/dev/null)
@@ -1423,7 +1594,7 @@ write_catalog() {
       entries="$(jq -n --argjson e "$entries" --arg id "$sid" --arg name "$sname" --arg editId "$sedit" '
         $e + [{id:$id, name:$name, kinds:[], state:"orphaned",
                editId: (if $editId == "" then null else $editId end),
-               upstream:null, source:null, branch:null, lastEdit:null, lastUpdate:null}]')"
+               upstream:null, source:null, conflict:null, branch:null, lastEdit:null, lastUpdate:null}]')"
     done < <(find "$DATA_DIR" -mindepth 1 -maxdepth 1 -name '*.json' ! -name 'catalog.json' -print 2>/dev/null)
 
     entries="$(jq -n --argjson e "$entries" --arg enabled "$enabled" '
@@ -1458,7 +1629,7 @@ cmd_heal() {
   need jq
   local enabled; enabled="$(enabled_map)"
   local mfile sid edit_id clone_enabled want
-  local -a rebuilt=() activate=()
+  local -a rebuilt=() activate=() reconciled=()
   while IFS= read -r mfile; do
     [[ -n "$mfile" ]] || continue
     sid="$(jq -r '.sourceId // empty' "$mfile" 2>/dev/null || true)"
@@ -1469,6 +1640,15 @@ cmd_heal() {
     # The user explicitly chose the original: leave it alone.
     want="$(jq -r '.want // "patched"' "$mfile" 2>/dev/null || echo patched)"
     [[ "$want" == "original" ]] && continue
+
+    # A conflict that was finished outside PlugPatcher (the rebase is gone):
+    # forget it and rebuild the clone from the rebased branch.
+    if conflict_recorded "$sid" && ! rebase_in_progress "$(repo_dir "$sid")"; then
+      log "conflict for $sid was resolved elsewhere; rebuilding $edit_id"
+      clear_conflict "$sid"
+      generate_clone "$sid" && { rebuilt+=("$sid"); reconciled+=("$sid"); }
+      continue
+    fi
 
     if [[ ! -d "$(plugin_dir "$edit_id")" ]]; then
       # Metadata without a clone: rebuild it from the repo.
@@ -1498,6 +1678,9 @@ cmd_heal() {
     ensure_active "$s"
   done
 
+  # A reconciled conflict changes what the shell loads, so make it visible.
+  (( ${#reconciled[@]} )) && schedule_shell_restart
+
   # Always refresh the catalog (a read); only ever poke the shell above, and
   # only when there was something to heal.
   write_catalog >/dev/null 2>&1 || true
@@ -1525,14 +1708,28 @@ sync_all_editing() {
   fi
   printf '\nSyncing patched plugins:\n'
   shell_stop
+  local synced=0 conflicted=0 failed=0
   while IFS= read -r id; do
     [[ -n "$id" ]] || continue
-    sync_repo "$id" || { warn "cannot auto-merge upstream for '$id'; resolve manually in $(repo_dir "$id")"; rc=1; }
+    if sync_repo "$id"; then
+      synced=$((synced + 1))
+    elif rebase_in_progress "$(repo_dir "$id")"; then
+      conflicted=$((conflicted + 1))
+      warn "conflict in '$id'; 'plugpatcher resolve $id' or 'plugpatcher abort $id'"
+    else
+      failed=$((failed + 1))
+      warn "could not sync '$id'"
+    fi
   done <<<"$ids"
   shell_start
   shell_wait_up || true
   rescan
   write_catalog >/dev/null 2>&1 || true
+  printf '%d synced' "$synced"
+  (( conflicted )) && printf ' · %d conflict(s)' "$conflicted"
+  (( failed )) && printf ' · %d failed' "$failed"
+  printf '\n'
+  (( conflicted || failed )) && rc=1
   return $rc
 }
 
@@ -1622,6 +1819,9 @@ Commands:
   heal                 re-activate adopted clones that went dormant
   update-all           update everything: Omarchy's updater, then rebase your patches
   sync-all             rebase every patched plugin onto its upstream
+  resolve <id>         finish a paused conflict and rebuild the clone
+  abort <id>           drop the paused conflict, keeping your version
+  mergetool <id>       open the 3-way merge view for a conflicted plugin
   pr-cancel <id>       close the pull request most recently opened for <id>
   source <id>          open the plugin's upstream (source) page in the browser
   open-url <url>       open a URL in the browser
@@ -1654,6 +1854,9 @@ main() {
     heal)         cmd_heal "$@" ;;
     update-all)   cmd_update_all "$@" ;;
     sync-all)     cmd_sync_all "$@" ;;
+    resolve)      cmd_resolve "$@" ;;
+    abort)        cmd_abort "$@" ;;
+    mergetool)    cmd_mergetool "$@" ;;
     pr-cancel|unpr|cancel-pr) cmd_pr_cancel "$@" ;;
     source)       cmd_source "$@" ;;
     open-url)     cmd_open_url "$@" ;;

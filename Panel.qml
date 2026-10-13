@@ -137,6 +137,9 @@ Panel {
     if (a === "open") return "Opening…"
     if (a === "update-all") return "Opening a terminal…"
     if (a === "sync-all") return "Opening a terminal…"
+    if (a === "mergetool") return "Opening the merge view…"
+    if (a === "resolve") return "Finishing the rebase…"
+    if (a === "abort") return "Dropping the conflict…"
     if (a === "editor") return "Opening the editor…"
     if (a === "files") return "Opening the folder…"
     return "Working…"
@@ -178,6 +181,7 @@ Panel {
 
   function stateLabel(p) {
     if (!p) return ""
+    if (p.conflict) return "conflict"
     if (p.state === "orphaned") return "orphaned"
     if (p.state === "editing") return p.cloneEnabled ? "patched" : "original"
     return "original"
@@ -185,6 +189,7 @@ Panel {
 
   function stateColor(p) {
     if (!p) return root.muted
+    if (p.conflict) return root.danger
     if (p.state === "orphaned") return root.danger
     if (p.state === "editing" && p.cloneEnabled) return Color.accent
     return root.muted
@@ -830,7 +835,7 @@ Panel {
                       }
 
                       ActionButton {
-                        visible: modelData.state === "editing"
+                        visible: modelData.state === "editing" && !modelData.conflict
                         text: "Update"
                         onClicked: root.runAction(["sync", modelData.id])
                       }
@@ -842,7 +847,7 @@ Panel {
                       }
 
                       ActionButton {
-                        visible: modelData.state === "editing" && root.pendingDelete !== modelData.id && root.pendingPr !== modelData.id
+                        visible: modelData.state === "editing" && !modelData.conflict && root.pendingDelete !== modelData.id && root.pendingPr !== modelData.id
                         text: "Send PR"
                         onClicked: root.pendingPr = modelData.id
                       }
@@ -852,6 +857,63 @@ Panel {
                         text: "Delete"
                         foreground: root.danger
                         onClicked: root.pendingDelete = modelData.id
+                      }
+                    }
+
+                    // conflict box
+                    Rectangle {
+                      visible: !!modelData.conflict
+                      width: parent.width
+                      implicitHeight: conflictCol.implicitHeight + Style.space(16)
+                      radius: Style.cornerRadius
+                      color: Util.alpha(root.danger, 0.14)
+                      border.width: 1
+                      border.color: Util.alpha(root.danger, 0.55)
+
+                      Column {
+                        id: conflictCol
+                        anchors.left: parent.left
+                        anchors.right: parent.right
+                        anchors.verticalCenter: parent.verticalCenter
+                        anchors.leftMargin: Style.space(12)
+                        anchors.rightMargin: Style.space(12)
+                        spacing: Style.space(6)
+
+                        Text {
+                          textFormat: Text.PlainText
+                          text: "Conflict with upstream" + (modelData.conflict && modelData.conflict.files && modelData.conflict.files.length
+                                ? " — " + modelData.conflict.files.join(", ") : "")
+                          color: root.danger
+                          font.family: root.ff
+                          font.pixelSize: Style.font.bodySmall
+                          wrapMode: Text.WordWrap
+                          width: parent.width
+                        }
+
+                        Row {
+                          spacing: Style.space(6)
+
+                          ActionButton {
+                            text: "Resolve"
+                            onClicked: root.runAction(["mergetool", modelData.id])
+                          }
+
+                          ActionButton {
+                            text: "Edit files"
+                            onClicked: root.runAction(["editor", modelData.id])
+                          }
+
+                          ActionButton {
+                            text: "Continue"
+                            onClicked: root.runAction(["resolve", modelData.id])
+                          }
+
+                          ActionButton {
+                            text: "Abort"
+                            foreground: root.danger
+                            onClicked: root.runAction(["abort", modelData.id])
+                          }
+                        }
                       }
                     }
 
