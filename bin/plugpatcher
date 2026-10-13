@@ -995,10 +995,13 @@ else:
 print("yes" if bad else "no")
 PY
 )"
-  if [[ "$needs" != "yes" ]]; then echo "already on $target; nothing to do"; return 0; fi
+  if [[ "$needs" == "yes" ]]; then echo "switching to $target"; else echo "already on $target; reloading the shell"; fi
 
   shell_stop
 
+  # Only rewrite the config when something actually needs to move. Either way
+  # the shell is restarted below, so a switch also acts as a reload.
+  if [[ "$needs" == "yes" ]]; then
   python3 - "$src" "$clone" "$target" "$cfg" "$nonwidget" <<'PY'
 import json, os, stat, sys, tempfile
 src, clone, target, path, nonwidget = sys.argv[1:6]
@@ -1053,6 +1056,7 @@ except BaseException:
     except OSError: pass
     raise
 PY
+  fi
 
   shell_start
   shell_wait_up || true
@@ -1697,18 +1701,24 @@ run_in_terminal() { # subcommand
 
 # Rebase every patched plugin onto its upstream and rebuild its clone. The
 # shell is stopped for the whole batch, so it does not reload once per plugin -
-# it comes back a single time at the end.
-sync_all_editing() {
+# it comes back a single time at the end. With "yes" a restart also happens when
+# there is nothing patched (Update & Sync just refreshed the originals).
+sync_all_editing() { # [restart-when-empty: yes|no]
+  local on_empty="${1:-no}" synced=0 conflicted=0 failed=0 rc=0
   write_catalog >/dev/null 2>&1 || true
-  local ids id rc=0
+  local ids id
   ids="$(jq -r '(.plugins // [])[]|select(.state=="editing")|.id' "$CATALOG" 2>/dev/null || true)"
   if [[ -z "$ids" ]]; then
-    log "no patched plugins to sync"
+    if [[ "$on_empty" == "yes" ]]; then
+      log "nothing patched; restarting the shell so updated plugins reload"
+      schedule_shell_restart
+    else
+      log "no patched plugins to sync"
+    fi
     return 0
   fi
   printf '\nSyncing patched plugins:\n'
   shell_stop
-  local synced=0 conflicted=0 failed=0
   while IFS= read -r id; do
     [[ -n "$id" ]] || continue
     if sync_repo "$id"; then
@@ -1738,7 +1748,15 @@ sync_all_editing() {
 cmd_update_all() {
   if [[ ! ( -t 0 && -t 1 ) ]]; then run_in_terminal "update-all"; return 0; fi
   omarchy plugin update --yes || true
-  sync_all_editing
+  sync_all_editing yes
+}
+
+# Restart the shell so plugins whose files changed on disk are loaded again.
+# The shell's own file-watch reload is not reliable (it can fail and leave the
+# old instance up), so a restart is the safe way to pick up an update.
+cmd_reload() { # [id]
+  if [[ -n "${1:-}" ]]; then log "reloading '${1}' (restarting the shell)"; else log "reloading plugins (restarting the shell)"; fi
+  schedule_shell_restart
 }
 
 # Sync just the patched plugins.
@@ -1819,6 +1837,7 @@ Commands:
   heal                 re-activate adopted clones that went dormant
   update-all           update everything: Omarchy's updater, then rebase your patches
   sync-all             rebase every patched plugin onto its upstream
+  reload [id]          restart the shell so changed plugin files are reloaded
   resolve <id>         finish a paused conflict and rebuild the clone
   abort <id>           drop the paused conflict, keeping your version
   mergetool <id>       open the 3-way merge view for a conflicted plugin
@@ -1854,6 +1873,7 @@ main() {
     heal)         cmd_heal "$@" ;;
     update-all)   cmd_update_all "$@" ;;
     sync-all)     cmd_sync_all "$@" ;;
+    reload)       cmd_reload "$@" ;;
     resolve)      cmd_resolve "$@" ;;
     abort)        cmd_abort "$@" ;;
     mergetool)    cmd_mergetool "$@" ;;

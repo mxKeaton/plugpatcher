@@ -137,6 +137,7 @@ Panel {
     if (a === "open") return "Opening…"
     if (a === "update-all") return "Opening a terminal…"
     if (a === "sync-all") return "Opening a terminal…"
+    if (a === "reload") return "Restarting the shell…"
     if (a === "mergetool") return "Opening the merge view…"
     if (a === "resolve") return "Finishing the rebase…"
     if (a === "abort") return "Dropping the conflict…"
@@ -482,6 +483,15 @@ Panel {
                 onClicked: root.sortBy = modelData.key
               }
             }
+          }
+
+          ActionButton {
+            id: reloadButton
+            anchors.right: syncButton.left
+            anchors.rightMargin: Style.space(6)
+            anchors.verticalCenter: parent.verticalCenter
+            text: "Reload"
+            onClicked: root.runAction(["reload"])
           }
 
           ActionButton {
