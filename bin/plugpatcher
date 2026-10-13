@@ -983,13 +983,21 @@ except Exception: print("no"); raise SystemExit
 pairs = {src, clone}
 layout = d.get("bar", {}).get("layout", {}) or {}
 
+def tile_id(x):
+    # a tile may be a bare id, an entry {id}, or a wrapper {entry: {id}}
+    if isinstance(x, str): return x
+    if isinstance(x, dict):
+        if x.get("id"): return x["id"]
+        e = x.get("entry")
+        if isinstance(e, dict) and e.get("id"): return e["id"]
+    return None
+
 def nested_of(entry):
-    # Bar Folder and similar hosts keep their tiles in an entry-local list.
+    # Hosts (Bar Folder, Tray) keep their tiles in an entry-local `widgets` list.
     if not isinstance(entry, dict): return []
     w = entry.get("widgets")
     if isinstance(w, list):
-        return [x if isinstance(x, str)
-                else (x.get("id") if isinstance(x, dict) else None) for x in w]
+        return [tile_id(x) for x in w]
     if isinstance(w, dict):
         return list(w.keys())
     return []
@@ -1076,12 +1084,29 @@ if isinstance(d.get("plugins"), list):
 # Bar Folder hosts keep their tiles nested in their own entry (a `widgets` list,
 # with per-widget settings in `widgetSettings`). The shell's registry does not
 # look inside, so a widget placed there has to be swapped here.
+def tile_id(x):
+    # a tile may be a bare id, an entry {id}, or a wrapper {entry: {id}}
+    if isinstance(x, str): return x
+    if isinstance(x, dict):
+        if x.get("id"): return x["id"]
+        e = x.get("entry")
+        if isinstance(e, dict) and e.get("id"): return e["id"]
+    return None
+
+def set_tile_id(x, new):
+    if not isinstance(x, dict): return
+    if x.get("id") is not None:
+        x["id"] = new
+        return
+    e = x.get("entry")
+    if isinstance(e, dict) and e.get("id") is not None:
+        e["id"] = new
+
 def nested_of(entry):
     if not isinstance(entry, dict): return []
     w = entry.get("widgets")
     if isinstance(w, list):
-        return [x if isinstance(x, str)
-                else (x.get("id") if isinstance(x, dict) else None) for x in w]
+        return [tile_id(x) for x in w]
     if isinstance(w, dict):
         return list(w.keys())
     return []
@@ -1094,8 +1119,8 @@ def swap_nested(seq):
             for i, x in enumerate(w):
                 if isinstance(x, str):
                     if x in pairs: w[i] = target
-                elif isinstance(x, dict) and x.get("id") in pairs:
-                    x["id"] = target
+                elif tile_id(x) in pairs:
+                    set_tile_id(x, target)
         elif isinstance(w, dict):
             for k in list(w.keys()):
                 if k in pairs: w[target] = w.pop(k)
@@ -1127,9 +1152,6 @@ if barwidget:
 # (the original was nested in a host when the clone was enabled), and swapping
 # each occurrence would multiply it. A host (folder) placement is an explicit
 # choice, so it wins over a top-level duplicate.
-def tile_id(x):
-    return x if isinstance(x, str) else (x.get("id") if isinstance(x, dict) else None)
-
 host_kept = 0
 for sec in layout:
     for e in layout.get(sec, []):
