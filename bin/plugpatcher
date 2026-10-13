@@ -1014,15 +1014,27 @@ def placed_ids():
 def stale(seq):
     return any(isinstance(e, dict) and e.get("id") in pairs and e.get("id") != target for e in seq)
 def placements():
-    # how many times the target sits in the layout (top-level, nested, plugins[])
+    # real placements in the bar: top-level entries and nested tiles. The
+    # plugins[] entry a Tray capture adds is a "keep loaded" listing, not a
+    # placement, so it must not count as a duplicate.
     n = 0
     for sec in layout:
         for e in layout.get(sec, []):
             if isinstance(e, dict) and e.get("id") == target: n += 1
             n += sum(1 for x in nested_of(e) if x == target)
-    if isinstance(d.get("plugins"), list):
-        n += sum(1 for e in d["plugins"] if isinstance(e, dict) and e.get("id") == target)
     return n
+
+def listed_wrappers():
+    # hosted tiles that asked for the plugin to stay in plugins[]
+    out = []
+    for sec in layout:
+        for e in layout.get(sec, []):
+            w = e.get("widgets") if isinstance(e, dict) else None
+            if not isinstance(w, list): continue
+            for x in w:
+                if isinstance(x, dict) and x.get("listed") and tile_id(x) == target:
+                    out.append(x)
+    return out
 bad = False
 for sec in layout:
     if stale(layout[sec]): bad = True
@@ -1030,6 +1042,12 @@ if isinstance(d.get("plugins"), list) and stale(d["plugins"]): bad = True
 # A nested tile still carrying the other id needs the same swap.
 for x in placed_ids():
     if x in pairs and x != target: bad = True
+# A host's ordering token (Tray keeps one id/icon per drawer entry) as well.
+for sec in layout:
+    for e in layout.get(sec, []):
+        if not isinstance(e, dict): continue
+        for tok in (e.get("order") or []):
+            if isinstance(tok, str) and tok in pairs and tok != target: bad = True
 # A duplicate placement (both ids present, or the same id twice) needs collapsing.
 if placements() > 1: bad = True
 # A bar widget stranded in plugins[] is not loaded: that needs repairing too.
@@ -1037,6 +1055,8 @@ if barwidget:
     in_plugins = isinstance(d.get("plugins"), list) and any(
         isinstance(e, dict) and e.get("id") == target for e in d["plugins"])
     if in_plugins and target not in placed_ids(): bad = True
+    # A hosted tile that asked to stay listed, but is not: put it back.
+    if listed_wrappers() and not in_plugins: bad = True
 dis = d.get("disabledPlugins", []) or []
 restores = d.get("cloneSourceRestores", []) or []
 if target == src:
@@ -1128,6 +1148,12 @@ def swap_nested(seq):
         if isinstance(ws, dict):
             for k in list(ws.keys()):
                 if k in pairs: ws[target] = ws.pop(k)
+        # The host's own ordering token for the tile must follow, or the tile
+        # is no longer matched and drops to the end of the drawer.
+        order = e.get("order")
+        if isinstance(order, list):
+            for i, tok in enumerate(order):
+                if isinstance(tok, str) and tok in pairs: order[i] = target
 
 layout = d.get("bar", {}).get("layout", {}) or {}
 for sec in layout:
@@ -1175,9 +1201,23 @@ for sec in layout:
         out.append(e)
     layout[sec] = out
 
-if isinstance(d.get("plugins"), list) and host_kept:
-    d["plugins"] = [e for e in d["plugins"]
-                    if not (isinstance(e, dict) and e.get("id") == target)]
+# A Tray-captured tile is only loadable while its id is also in plugins[] (the
+# tray sets `listed` and adds that entry). Keep it there: removing it made the
+# widget vanish from both the tray and the bar.
+def listed_here():
+    for sec in layout:
+        for e in layout.get(sec, []):
+            w = e.get("widgets") if isinstance(e, dict) else None
+            if not isinstance(w, list): continue
+            for x in w:
+                if isinstance(x, dict) and x.get("listed") and tile_id(x) == target:
+                    return True
+    return False
+
+if barwidget and listed_here():
+    if not isinstance(d.get("plugins"), list): d["plugins"] = []
+    if not any(isinstance(e, dict) and e.get("id") == target for e in d["plugins"]):
+        d["plugins"].append({"id": target})
 
 # Omarchy disables the source in disabledPlugins (and records a restore) while
 # a clone with non-bar-widget kinds is active. Undo/redo that with the flip.
