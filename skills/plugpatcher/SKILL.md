@@ -45,11 +45,16 @@ The clone carries `omarchy.clonedFrom = <id>`, so the shell:
 | `plugpatcher status <id>` | repo/branch/upstream ahead-behind for one plugin |
 | `plugpatcher setup <id> [url]` | start editing: clone upstream into the repo, generate the clone, switch to it |
 | `plugpatcher adopt [id] [--repo PATH] [--branch B] [--upstream URL]` | bring an existing git working copy under PlugPatcher, keeping its history; makes `local` the patched branch and resets the installed original to pristine (no arg = interactive wizard) |
-| `plugpatcher sync <id>` | `git fetch` upstream, rebase your branch, regenerate the clone; aborts on conflict |
+| `plugpatcher sync <id>` | `git fetch` upstream, rebase your branch, regenerate the clone; on a conflict the rebase is left **paused** and recorded (see `conflicts`) |
 | `plugpatcher reload [id]` | restart the shell so plugin files changed on disk reload (the shell's own watcher is unreliable) |
 | `plugpatcher mergetool <id>` | open a paused conflict in lazygit (offers to install it); rebuilds the clone if lazygit finishes the rebase |
 | `plugpatcher resolve <id>` | finish a paused rebase (refuses while files are unresolved) and rebuild the clone |
 | `plugpatcher abort <id>` | drop a paused rebase, keeping your version |
+| `plugpatcher conflicts [id] [--json]` | exactly what conflicts: each file, each region with line numbers, both sides, and the command to resolve it |
+| `plugpatcher resolve-file <id> <file> --mine\|--upstream` | take one whole file's side (`--mine` = your commit, `--upstream` = theirs; the mapping onto git's swapped ours/theirs is in the help) |
+| `plugpatcher resolve-hunk <id> <file> <n> --mine\|--upstream\|--both` | resolve one region by rewriting just that marker block; regions are numbered from the top of the file |
+| `plugpatcher skip <id>` | drop the commit that is stuck and replay the rest; the dropped commit is kept at `refs/plugpatcher/skipped/<sha>` |
+| `plugpatcher undo <id>` | go back to the automatic pre-sync snapshot (`refs/plugpatcher/pre-sync/<ts>`, recorded as `lastBackup`) |
 | `plugpatcher pr <id> [ai|manual]` | push your branch and open a PR: `ai` writes the title/description, `manual` opens GitHub's form (one branch per patch) |
 | `plugpatcher pr-cancel <id>` | close the PR most recently opened for `<id>` (also `unpr`) |
 | `plugpatcher source <id>` | open the plugin's upstream (source) page in the browser |
@@ -92,8 +97,12 @@ JSON (the panel uses it for its dropdowns).
    rescan does not reliably rebuild a live widget/panel), so the change becomes
    visible. It is idempotent.
 4. **To pull upstream**: `plugpatcher sync <id>`. If upstream changed the same
-   lines, `sync` aborts, changes nothing, and notifies; resolve the rebase in
-   the repo, then run `sync` again.
+   lines, the rebase is left **paused**: nothing is lost and the loaded clone
+   stays at its last good version. Run `plugpatcher conflicts <id>` to see each
+   region with both sides, resolve it with `resolve-hunk` / `resolve-file` (or
+   `mergetool` for lazygit), then `plugpatcher resolve <id>`. `skip` drops the
+   stuck commit instead, and `abort` gives up on the update. Every sync also
+   parks a snapshot that `plugpatcher undo <id>` returns to.
 5. **To PR**: `plugpatcher pr <id>` (uses `gh`, which Omarchy sets up as the git
    credential helper). Each distinct patch gets its own branch
    (`plugpatcher/<id>-<patch-id>`), so a new round of changes opens a new PR;

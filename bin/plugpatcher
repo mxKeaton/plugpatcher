@@ -741,6 +741,21 @@ sync_repo() { # id
     return 1
   fi
 
+  # Snapshot the patch branch before rewriting it: cheap, and it makes every
+  # later mess recoverable with 'plugpatcher undo'. Also let git reuse a
+  # resolution the user already made for the same lines.
+  local bak; bak="refs/plugpatcher/pre-sync/$(date -u +%Y%m%d%H%M%S%N)"
+  if git -C "$repo" update-ref "$bak" "refs/heads/$branch" 2>/dev/null; then
+    meta_set "$id" lastBackup "$bak"
+    # Keep the snapshots from piling up: the five newest stay.
+    git -C "$repo" for-each-ref --sort=refname --format='%(refname)' refs/plugpatcher/pre-sync/ 2>/dev/null |
+      head -n -5 | while IFS= read -r old; do
+        [[ -n "$old" ]] && git -C "$repo" update-ref -d "$old" 2>/dev/null
+      done
+  fi
+  git -C "$repo" config rerere.enabled true 2>/dev/null || true
+  git -C "$repo" config rerere.autoupdate true 2>/dev/null || true
+
   if ! git -C "$repo" "${GIT_ID[@]}" rebase "origin/$ub" >/dev/null 2>&1; then
     if rebase_in_progress "$repo"; then
       # A real conflict: leave it paused so it can be resolved in place, and
@@ -818,6 +833,39 @@ cmd_mergetool() { # id
   fi
 }
 
+# Continue a rebase whose conflicts are resolved. A commit that has become empty
+# - because the resolution took the upstream side wholesale - is dropped, exactly
+# as git's own advice says, and kept as a ref so it is not lost.
+finish_rebase() { # id
+  local id="$1" repo stopped saved=""
+  repo="$(repo_dir "$id")"
+  stopped="$(cat "$repo/.git/rebase-merge/stopped-sha" 2>/dev/null || true)"
+  # Nothing staged on top of HEAD means the commit being replayed no longer
+  # changes anything, which git refuses to replay. Drop it instead.
+  if [[ -n "$stopped" && -z "$(git -C "$repo" diff --cached --name-only)" ]]; then
+    saved="refs/plugpatcher/skipped/$stopped"
+    git -C "$repo" update-ref "$saved" "$stopped" 2>/dev/null || saved=""
+    if git -C "$repo" "${GIT_ID[@]}" -c core.editor=true rebase --skip >/dev/null 2>&1; then
+      if [[ -n "$saved" ]]; then
+        log "a patch commit became empty and was dropped (kept at $saved)"
+      else
+        log "a patch commit became empty and was dropped"
+      fi
+      return 0
+    fi
+  fi
+  # core.editor=true keeps `rebase --continue` from opening an editor.
+  if git -C "$repo" "${GIT_ID[@]}" -c core.editor=true rebase --continue >/dev/null 2>&1; then
+    return 0
+  fi
+  if rebase_in_progress "$repo"; then
+    record_conflict "$id"
+    die "another conflict appeared in '$id'; run 'plugpatcher conflicts $id' and resolve it"
+  fi
+  git -C "$repo" rebase --abort >/dev/null 2>&1 || true
+  die "could not finish the rebase for '$id'"
+}
+
 # Finish a paused rebase: every file resolved, then continue it.
 cmd_resolve() { # id
   local id="${1:-}"
@@ -832,25 +880,8 @@ cmd_resolve() { # id
   [[ -z "$left" ]] || die "still unresolved in '$id': $(tr '\n' ' ' <<<"$left")"
 
   git -C "$repo" add -A
-  # core.editor=true keeps `rebase --continue` from opening an editor.
-  if ! git -C "$repo" "${GIT_ID[@]}" -c core.editor=true rebase --continue >/dev/null 2>&1; then
-    if rebase_in_progress "$repo"; then
-      record_conflict "$id"
-      die "another conflict appeared in '$id'; resolve it and run 'plugpatcher resolve $id' again"
-    fi
-    git -C "$repo" rebase --abort >/dev/null 2>&1 || true
-    die "could not continue the rebase for '$id'"
-  fi
-
-  clear_conflict "$id"
-  generate_clone "$id"
-  touch_last_sync "$id"
-  schedule_shell_restart
-  ensure_active "$id"
-  rescan
-  write_catalog >/dev/null 2>&1 || true
-  notify "PlugPatcher: resolved $id" "Rebased on origin/$ub"
-  log "resolved '$id'"
+  finish_rebase "$id"
+  finish_branch_change "$id" "resolved $id" "Rebased on origin/$ub"
 }
 
 # Drop a paused rebase and keep the version you had.
@@ -867,6 +898,372 @@ cmd_abort() { # id
   write_catalog >/dev/null 2>&1 || true
   notify "PlugPatcher: conflict dropped for $id" "Your version is unchanged"
   log "aborted the conflict for '$id'"
+}
+
+# -------------------------------------------------------------------- conflicts
+#
+# A paused rebase leaves both versions in the file, between markers:
+#
+#     <<<<<<< HEAD                          (git's "ours")
+#     ||||||| merged common ancestors       (only with the diff3 style)
+#     =======
+#     >>>>>>> 402e661 (Reverse the lorem)   (git's "theirs")
+#
+# The trap: inside a rebase "ours" is the UPSTREAM side and "theirs" is YOUR
+# commit - the opposite of what the words suggest. Everything user-facing below
+# says --upstream / --mine, and conflict_side_flag() is the one place that turns
+# those into git's flags.
+#
+# The parser reads the file as text instead of asking git, which is what makes
+# resolving a single conflict possible: we know the exact line ranges to rewrite.
+
+CONFLICT_AWK='
+function esc(s) { gsub(/\\/, "\\\\", s); gsub(/"/, "\\\"", s); gsub(/\t/, "\\t", s); return s }
+/^<{7,}( |$)/ {
+  started = 1; n++
+  l = substr($0, 8); sub(/^[< ]+/, "", l); oursLab = l
+  theirsLab = ""; baseLab = ""; ours = ""; theirs = ""; base = ""; start = NR; mode = 1
+  next
+}
+started && /^\|{7,}( |$)/ { mode = 2; l = substr($0, 8); sub(/^[| ]+/, "", l); baseLab = l; next }
+started && /^={7,}[ \t]*$/ { mode = 3; next }
+started && /^>{7,}( |$)/ {
+  end = NR; l = substr($0, 8); sub(/^[> ]+/, "", l); theirsLab = l
+  hunks = hunks (n > 1 ? "," : "") sprintf("{\"n\":%d,\"start\":%d,\"end\":%d,\"oursLabel\":\"%s\",\"theirsLabel\":\"%s\",\"baseLabel\":%s,\"ours\":[%s],\"theirs\":[%s],\"base\":[%s]}", n, start, end, esc(oursLab), esc(theirsLab), (baseLab == "" ? "null" : "\"" esc(baseLab) "\""), ours, theirs, base)
+  started = 0
+  next
+}
+started && mode == 1 { ours   = ours   (ours   == "" ? "" : ",") "\"" esc($0) "\""; next }
+started && mode == 2 { base   = base   (base   == "" ? "" : ",") "\"" esc($0) "\""; next }
+started && mode == 3 { theirs = theirs (theirs == "" ? "" : ",") "\"" esc($0) "\""; next }
+END { printf("{\"path\":\"%s\",\"hunks\":[%s]}\n", esc(path), hunks) }
+'
+
+# Rewrite one conflict block, keeping a chosen side. Exits 3 when there is no
+# such block, so a bad number can never truncate the file.
+RESOLVE_HUNK_AWK='
+BEGIN { cur = 0; picked = 0; mode = 0; keepO = 0; keepT = 0 }
+/^<{7,}( |$)/ {
+  cur++
+  if (cur == pick) {
+    picked = 1; mode = 1
+    keepO = (choice == "upstream" || choice == "both")
+    keepT = (choice == "mine"     || choice == "both")
+  } else { print }
+  next
+}
+picked && /^\|{7,}( |$)/ { mode = 2; next }
+picked && /^={7,}[ \t]*$/ { mode = 3; next }
+picked && /^>{7,}( |$)/ { picked = 0; mode = 0; next }
+{
+  if (!picked) { print; next }
+  if (mode == 1 && keepO) { print; next }
+  if (mode == 3 && keepT) { print; next }
+  next
+}
+END { if (cur < pick) exit 3 }
+'
+
+# mine | upstream -> the git flag that means it. Rebasing swaps them.
+conflict_side_flag() { # mine|upstream
+  case "$1" in
+    mine|theirs)   printf '%s' '--theirs' ;;
+    upstream|ours) printf '%s' '--ours' ;;
+    *) return 1 ;;
+  esac
+}
+
+commit_desc() { # repo rev -> "abc1234 subject", empty when it does not resolve
+  git -C "$1" log -1 --format='%h %s' "$2" 2>/dev/null || true
+}
+
+todo_count() { # file -> non-comment lines
+  [[ -f "$1" ]] || { printf '0'; return 0; }
+  awk '!/^[[:space:]]*(#|$)/ { n++ } END { print n + 0 }' "$1" 2>/dev/null || printf '0'
+}
+
+# Conflicted right now? Either a paused rebase, or a conflict we recorded and
+# have not cleared yet (the second case is what 'heal' repairs).
+plugin_conflicted() { # id
+  is_setup "$1" || return 1
+  if rebase_in_progress "$(repo_dir "$1")"; then return 0; fi
+  conflict_recorded "$1"
+}
+
+metadata_ids() { # every plugin PlugPatcher knows about
+  local f
+  while IFS= read -r f; do
+    printf '%s\n' "$(basename "$f" .json)"
+  done < <(find "$DATA_DIR" -mindepth 1 -maxdepth 1 -name '*.json' ! -name 'catalog.json' -print 2>/dev/null | sort)
+}
+
+# {"files":[{path,hunks:[{n,start,end,oursLabel,theirsLabel,ours[],theirs[]}]}]}
+conflict_json() { # repo
+  local repo="$1" f
+  {
+    while IFS= read -r f; do
+      [[ -n "$f" ]] || continue
+      [[ -f "$repo/$f" ]] || continue
+      awk -v path="$f" "$CONFLICT_AWK" "$repo/$f" || true
+    done < <(conflicted_files "$repo")
+  } | jq -s '{files: (map(select(. != null)))}' 2>/dev/null || printf '{"files":[]}'
+}
+
+# The whole state of one conflict: what is queued, what we are rebasing onto,
+# and every conflicting region. This is what the panel and the reporters use.
+conflict_report_json() { # id
+  local id="$1" mf repo ub branch rm_dir onto stopped desc
+  mf="$(meta_file "$id")"; repo="$(repo_dir "$id")"
+  ub="$(jq -r '.upstreamBranch // "HEAD"' "$mf" 2>/dev/null || printf 'HEAD')"
+  branch="$(jq -r '.branch // "HEAD"' "$mf" 2>/dev/null || printf 'HEAD')"
+  rm_dir="$repo/.git/rebase-merge"
+  [[ -d "$rm_dir" ]] || rm_dir="$repo/.git/rebase-apply"
+  onto="$(cat "$rm_dir/onto" 2>/dev/null || true)"
+  stopped="$(cat "$rm_dir/stopped-sha" 2>/dev/null || true)"
+  desc="$(commit_desc "$repo" "$onto")"
+  local paused=false
+  if rebase_in_progress "$repo"; then paused=true; fi
+  conflict_json "$repo" | jq \
+    --arg id "$id" --arg repo "$repo" --arg ub "$ub" --arg branch "$branch" \
+    --arg onto "$onto" --arg stopped "$stopped" --arg desc "$desc" \
+    --argjson remaining "$(todo_count "$rm_dir/git-rebase-todo")" \
+    --argjson applied "$(todo_count "$rm_dir/done")" \
+    --argjson paused "$paused" \
+    '{id:$id, repo:$repo, upstreamBranch:$ub, branch:$branch, paused:$paused,
+      onto:{sha:(if $onto == "" then null else $onto end),
+            desc:(if $desc == "" then null else $desc end)},
+      stopped:(if $stopped == "" then null else $stopped end),
+      remaining:$remaining, applied:$applied, files:.files}'
+}
+
+# Human report: the exact lines that clash, and the exact command for each.
+print_conflict_human() { # id json
+  jq -r --arg id "$1" --arg head "HEAD" '
+    (if .paused
+       then ("\($id): \(.files | length) conflicted file(s)"
+             + (if .remaining > 0 then "  - \(.remaining) commit(s) queued after this one" else "" end))
+       else "\($id): a conflict is recorded but no rebase is paused - run: plugpatcher heal" end),
+    (if (.paused and (.onto.desc != null)) then "  rebasing onto \(.onto.desc)" else empty end),
+    ( .onto.desc as $onto | .files[] as $f | (
+        "",
+        "  \($f.path)",
+        (if ($f.hunks | length) == 0
+           then "    no text conflict (add/delete or binary): plugpatcher resolve-file \($id) \($f.path) --mine|--upstream"
+           else empty end),
+        ( $f.hunks[] | (
+            "    conflict #\(.n), lines \(.start)-\(.end)",
+            "      upstream   [\(if .oursLabel == $head and $onto != null then $onto else .oursLabel end)]:",
+            ( .ours[] | "        \(.)" ),
+            "      your patch [\(.theirsLabel)]:",
+            ( .theirs[] | "        \(.)" ),
+            "      keep upstream: plugpatcher resolve-hunk \($id) \($f.path) \(.n) --upstream",
+            "      keep mine:     plugpatcher resolve-hunk \($id) \($f.path) \(.n) --mine",
+            "      keep both:     plugpatcher resolve-hunk \($id) \($f.path) \(.n) --both"
+        ) )
+    ) ),
+    (if .paused then "  finish: plugpatcher resolve \($id)   drop one commit: plugpatcher skip \($id)   give up: plugpatcher abort \($id)" else empty end)
+  ' <<<"$2"
+}
+
+# How much of the conflict is left, and what to do next.
+conflict_progress() { # id
+  local left; left="$(conflicted_files "$(repo_dir "$1")" | tr '\n' ' ' | sed 's/ *$//')"
+  if [[ -z "$left" ]]; then
+    printf 'plugpatcher: every conflict is resolved - finish with: plugpatcher resolve %s\n' "$1" >&2
+  else
+    printf 'plugpatcher: still unresolved in %s: %s\n' "$1" "$left" >&2
+  fi
+}
+
+# Shared tail for anything that changes the patch branch and must be visible.
+finish_branch_change() { # id summary body
+  local id="$1" summary="$2" body="$3"
+  clear_conflict "$id"
+  generate_clone "$id"
+  touch_last_sync "$id"
+  schedule_shell_restart
+  ensure_active "$id"
+  rescan
+  write_catalog >/dev/null 2>&1 || true
+  notify "PlugPatcher: $summary" "$body"
+  log "$summary"
+}
+
+# Show exactly what conflicts, where, and on which side.
+cmd_conflicts() { # [id] [--json]
+  local id="" json=0 arg
+  while (( $# > 0 )); do
+    arg="$1"; shift
+    case "$arg" in
+      --json) json=1 ;;
+      -h|--help) printf 'usage: plugpatcher conflicts [<plugin-id>] [--json]\n'; return 0 ;;
+      -*) die "unknown option '$arg'" ;;
+      *) if [[ -n "$id" ]]; then die "unexpected argument '$arg'"; fi; id="$arg" ;;
+    esac
+  done
+  need git; need jq
+
+  local -a targets=()
+  if [[ -n "$id" ]]; then
+    is_setup "$id" || die "'$id' is not set up"
+    targets=("$id")
+  else
+    local p
+    while IFS= read -r p; do targets+=("$p"); done < <(metadata_ids)
+  fi
+
+  if (( json )); then
+    {
+      local t
+      for t in "${targets[@]}"; do
+        if plugin_conflicted "$t"; then conflict_report_json "$t"; fi
+      done
+    } | jq -s --arg id "$id" \
+        'if $id == "" then {plugins: .}
+         else (.[0] // {id:$id, paused:false, remaining:0, files:[]}) end'
+    return 0
+  fi
+
+  local found=0 t
+  for t in "${targets[@]}"; do
+    if plugin_conflicted "$t"; then
+      found=$((found + 1))
+      print_conflict_human "$t" "$(conflict_report_json "$t")"
+    fi
+  done
+  if (( found == 0 )); then
+    if [[ -n "$id" ]]; then printf '%s: no conflict\n' "$id"; else printf 'no conflicts\n'; fi
+  fi
+  return 0
+}
+
+# Take one whole file's side.
+cmd_resolve_file() { # id <file> --mine|--upstream
+  local id="${1:-}" file="${2:-}" side="${3:-}"
+  [[ -n "$id" && -n "$file" && -n "$side" ]] ||
+    die "usage: plugpatcher resolve-file <plugin-id> <file> --mine|--upstream"
+  is_setup "$id" || die "'$id' is not set up"
+  side="${side#--}"
+  local flag; flag="$(conflict_side_flag "$side")" || die "choose one of: --mine | --upstream"
+  [[ "$file" != /* && "$file" != *..* ]] || die "file must be a path inside the plugin repo"
+  local repo; repo="$(require_repo "$id")"
+  rebase_in_progress "$repo" || die "'$id' has no conflict in progress"
+  [[ -f "$repo/$file" ]] || die "no such file in '$id': $file"
+  git -C "$repo" checkout "$flag" -- "$file" || die "could not take the $side version of $file"
+  git -C "$repo" add -- "$file" || die "could not stage $file"
+  log "took the $side version of $file in '$id'"
+  conflict_progress "$id"
+}
+
+# Resolve one conflict region, keeping mine, upstream's, or both.
+cmd_resolve_hunk() { # id <file> <n> --mine|--upstream|--both
+  local id="${1:-}" file="${2:-}" n="${3:-}" choice="${4:-}"
+  [[ -n "$id" && -n "$file" && -n "$n" && -n "$choice" ]] ||
+    die "usage: plugpatcher resolve-hunk <plugin-id> <file> <n> --mine|--upstream|--both"
+  is_setup "$id" || die "'$id' is not set up"
+  choice="${choice#--}"
+  case "$choice" in
+    mine|upstream|both) ;;
+    *) die "choose one of: --mine | --upstream | --both" ;;
+  esac
+  [[ "$n" =~ ^[0-9]+$ ]] || die "the conflict number must be a number"
+  [[ "$file" != /* && "$file" != *..* ]] || die "file must be a path inside the plugin repo"
+  local repo; repo="$(require_repo "$id")"
+  rebase_in_progress "$repo" || die "'$id' has no conflict in progress"
+  [[ -f "$repo/$file" ]] || die "no such file in '$id': $file"
+
+  local tmp; tmp="$(mktemp "${TMPDIR:-/tmp}/plugpatcher-hunk.XXXXXX")"
+  if ! awk -v pick="$n" -v choice="$choice" "$RESOLVE_HUNK_AWK" "$repo/$file" > "$tmp"; then
+    rm -f "$tmp"
+    die "no conflict #$n in $file (see: plugpatcher conflicts $id)"
+  fi
+  # Write through the original path so its mode and ownership are kept.
+  if ! cat "$tmp" > "$repo/$file"; then
+    rm -f "$tmp"
+    die "could not write $file"
+  fi
+  rm -f "$tmp"
+
+  if grep -qE '^(<{7,}|={7,}|>{7,})( |$)' "$repo/$file"; then
+    log "kept the $choice side of conflict #$n in $file (that file still has conflicts)"
+  else
+    git -C "$repo" add -- "$file" || die "could not stage $file"
+    log "resolved conflict #$n in $file by keeping: $choice"
+  fi
+  conflict_progress "$id"
+}
+
+# Drop the commit that is stuck and carry on with the rest.
+cmd_skip() { # id
+  local id="${1:-}"
+  [[ -n "$id" ]] || die "usage: plugpatcher skip <plugin-id>"
+  is_setup "$id" || die "'$id' is not set up"
+  need git; need jq
+  local repo mf ub; repo="$(require_repo "$id")"; mf="$(meta_file "$id")"
+  ub="$(jq -r '.upstreamBranch' "$mf")"
+  rebase_in_progress "$repo" || die "'$id' has no conflict in progress"
+
+  # Dropping a change is destructive, so keep it addressable first.
+  local stopped="" ref=""
+  stopped="$(cat "$repo/.git/rebase-merge/stopped-sha" 2>/dev/null || true)"
+  if [[ -n "$stopped" ]]; then
+    ref="refs/plugpatcher/skipped/$stopped"
+    if git -C "$repo" update-ref "$ref" "$stopped" 2>/dev/null; then
+      log "dropped commit kept at $ref"
+    else
+      ref=""
+    fi
+  fi
+
+  if ! git -C "$repo" "${GIT_ID[@]}" -c core.editor=true rebase --skip >/dev/null 2>&1; then
+    if rebase_in_progress "$repo"; then
+      record_conflict "$id"
+      die "another conflict appeared in '$id'; run 'plugpatcher conflicts $id'"
+    fi
+    git -C "$repo" rebase --abort >/dev/null 2>&1 || true
+    die "could not skip in '$id'"
+  fi
+
+  finish_branch_change "$id" "skipped a commit in $id" "Rebased on origin/$ub"
+  if [[ -n "$ref" ]]; then
+    printf 'plugpatcher: the dropped commit is still at %s in %s\n' "$ref" "$repo" >&2
+  fi
+  return 0
+}
+
+# Go back to the state before the last sync (the automatic pre-sync snapshot).
+cmd_undo() { # id [ref]
+  local id="${1:-}" want="${2:-}"
+  [[ -n "$id" ]] || die "usage: plugpatcher undo <plugin-id> [ref]"
+  is_setup "$id" || die "'$id' is not set up"
+  need git; need jq
+  local repo mf branch ref; repo="$(require_repo "$id")"; mf="$(meta_file "$id")"
+  branch="$(jq -r '.branch' "$mf")"
+  ref="$want"
+  [[ -n "$ref" ]] || ref="$(jq -r '.lastBackup // empty' "$mf" 2>/dev/null || true)"
+  [[ -n "$ref" ]] || die "'$id' has no recorded snapshot to undo to"
+  git -C "$repo" rev-parse --verify --quiet "$ref^{commit}" >/dev/null ||
+    die "unknown snapshot '$ref' in $repo"
+
+  # Stop a paused rebase first, and keep what we are about to replace.
+  if rebase_in_progress "$repo"; then
+    git -C "$repo" rebase --abort >/dev/null 2>&1 || true
+  fi
+  local keep="refs/plugpatcher/undo/$(date -u +%Y%m%d%H%M%S%N)"
+  if git -C "$repo" update-ref "$keep" "refs/heads/$branch" 2>/dev/null; then
+    log "the state being replaced is kept at $keep"
+  else
+    keep=""
+  fi
+
+  git -C "$repo" checkout -q -B "$branch" "$ref" ||
+    die "could not move '$branch' back to $ref"
+  finish_branch_change "$id" "undid the last sync of $id" "Back at $(git -C "$repo" log -1 --format=%h "$ref")"
+  if [[ -n "$keep" ]]; then
+    printf 'plugpatcher: %s is back at %s (the replaced state is at %s)\n' \
+      "$branch" "$(git -C "$repo" log -1 --format=%h "$ref")" "$keep" >&2
+  fi
+  return 0
 }
 
 # ---------------------------------------------------------------------- remove
@@ -1854,7 +2251,7 @@ write_catalog() {
     # PlugPatcher metadata whose original plugin is no longer installed: the
     # clone may still be loaded but there is no source to update from. Surface
     # it so the GUI can show and clean it up.
-    local known sid sname sedit mfile
+    local known sid sname sedit mfile sconflict
     known="$(jq -r '.[].id' <<<"$entries" 2>/dev/null || true)"
     while IFS= read -r mfile; do
       [[ -n "$mfile" ]] || continue
@@ -1863,10 +2260,11 @@ write_catalog() {
       grep -qxF "$sid" <<<"$known" && continue
       sname="$(jq -r '.name // .sourceId' "$mfile" 2>/dev/null || echo "$sid")"
       sedit="$(jq -r '.editId // empty' "$mfile" 2>/dev/null || true)"
-      entries="$(jq -n --argjson e "$entries" --arg id "$sid" --arg name "$sname" --arg editId "$sedit" '
+      sconflict="$(jq -c '.conflict // null' "$mfile" 2>/dev/null || echo null)"
+      entries="$(jq -n --argjson e "$entries" --arg id "$sid" --arg name "$sname" --arg editId "$sedit" --argjson conflict "${sconflict:-null}" '
         $e + [{id:$id, name:$name, kinds:[], state:"orphaned",
                editId: (if $editId == "" then null else $editId end),
-               upstream:null, source:null, conflict:null, branch:null, lastEdit:null, lastUpdate:null}]')"
+               upstream:null, source:null, conflict:$conflict, branch:null, lastEdit:null, lastUpdate:null}]')"
     done < <(find "$DATA_DIR" -mindepth 1 -maxdepth 1 -name '*.json' ! -name 'catalog.json' -print 2>/dev/null)
 
     entries="$(jq -n --argjson e "$entries" --arg enabled "$enabled" '
@@ -2036,10 +2434,13 @@ cmd_sync_all() {
 cmd_list() {
   need jq
   local entries; entries="$(write_catalog)"
-  printf '%-40s %-9s %s\n' "PLUGIN" "STATE" "CLONE"
-  jq -r '.[] | [.id, .state, (.editId // "-")] | @tsv' <<<"$entries" |
-    while IFS=$'\t' read -r id state clone; do
-      printf '%-40s %-9s %s\n' "$id" "$state" "$clone"
+  printf '%-40s %-9s %-24s %s\n' "PLUGIN" "STATE" "CLONE" "NOTE"
+  jq -r '.[] | [.id, .state, (.editId // "-"),
+                 (if .conflict
+                    then "conflict: " + ((.conflict.files // []) | length | tostring) + " file(s)"
+                    else "" end)] | @tsv' <<<"$entries" |
+    while IFS=$'\t' read -r id state clone note; do
+      printf '%-40s %-9s %-24s %s\n' "$id" "$state" "$clone" "$note"
     done
 }
 
@@ -2063,6 +2464,15 @@ cmd_status() {
   printf 'clone:    %s\n' "$edit_id"
   printf 'repo:     %s\n' "$repo"
   printf 'upstream: %s (%s)\n' "$upstream" "$ub"
+  if plugin_conflicted "$id"; then
+    local cj; cj="$(conflict_report_json "$id" 2>/dev/null || true)"
+    if [[ -n "$cj" ]]; then
+      printf 'conflict: %s file(s), %s region(s)%s\n' \
+        "$(jq -r '.files | length' <<<"$cj")" \
+        "$(jq -r '[.files[].hunks | length] | add // 0' <<<"$cj")" \
+        "$(jq -r 'if .paused then "" else " (no rebase paused - run: plugpatcher heal)" end' <<<"$cj")"
+    fi
+  fi
   if [[ "$upstream" != "(stock)" && -d "$repo/.git" ]]; then
     git -C "$repo" fetch -q origin 2>/dev/null || true
     local counts; counts="$(git -C "$repo" rev-list --left-right --count "origin/$ub...$branch" 2>/dev/null || echo "0	0")"
@@ -2108,6 +2518,11 @@ Commands:
   reload [id]          restart the shell so changed plugin files are reloaded
   resolve <id>         finish a paused conflict and rebuild the clone
   abort <id>           drop the paused conflict, keeping your version
+  conflicts [id]       show exactly what conflicts: files, line ranges, both sides
+  resolve-file <id> <file> --mine|--upstream        take one whole file's side
+  resolve-hunk <id> <file> <n> --mine|--upstream|--both   resolve one conflict region
+  skip <id>            drop the commit that is stuck and replay the rest
+  undo <id>            go back to the state before the last sync
   mergetool <id>       open lazygit to resolve a conflicted plugin (offers to install it)
   pr-cancel <id>       close the pull request most recently opened for <id>
   source <id>          open the plugin's upstream (source) page in the browser
@@ -2145,6 +2560,11 @@ main() {
     resolve)      cmd_resolve "$@" ;;
     abort)        cmd_abort "$@" ;;
     mergetool)    cmd_mergetool "$@" ;;
+    conflicts)    cmd_conflicts "$@" ;;
+    resolve-file) cmd_resolve_file "$@" ;;
+    resolve-hunk) cmd_resolve_hunk "$@" ;;
+    skip)         cmd_skip "$@" ;;
+    undo)         cmd_undo "$@" ;;
     pr-cancel|unpr|cancel-pr) cmd_pr_cancel "$@" ;;
     source)       cmd_source "$@" ;;
     open-url)     cmd_open_url "$@" ;;
