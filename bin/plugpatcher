@@ -761,6 +761,9 @@ sync_repo() { # id
       # A real conflict: leave it paused so it can be resolved in place, and
       # leave the loaded clone at its last good version.
       record_conflict "$id"
+      # Refresh the catalog now: the caller dies on the way out (see cmd_sync), so
+      # this is the only chance to make the conflict visible to the panel.
+      write_catalog >/dev/null 2>&1 || true
       local n; n="$(conflicted_files "$repo" | grep -c . || true)"
       notify "PlugPatcher: conflict in $id" "$n file(s) - resolve in PlugPatcher"
       return 1
@@ -1148,10 +1151,21 @@ cmd_resolve_file() { # id <file> --mine|--upstream
   [[ "$file" != /* && "$file" != *..* ]] || die "file must be a path inside the plugin repo"
   local repo; repo="$(require_repo "$id")"
   rebase_in_progress "$repo" || die "'$id' has no conflict in progress"
-  [[ -f "$repo/$file" ]] || die "no such file in '$id': $file"
-  git -C "$repo" checkout "$flag" -- "$file" || die "could not take the $side version of $file"
-  git -C "$repo" add -- "$file" || die "could not stage $file"
-  log "took the $side version of $file in '$id'"
+  git -C "$repo" ls-files -u -- "$file" | grep -q . ||
+    die "'$file' is not a conflicted file in '$id' (see: plugpatcher conflicts $id)"
+  # Stage 2 is the upstream side (git's "ours") and stage 3 the patch side
+  # (git's "theirs"). A missing stage means that side deleted the file, which is
+  # a perfectly good resolution - so remove it instead of checking it out.
+  local stage=2
+  if [[ "$side" == "mine" ]]; then stage=3; fi
+  if [[ -z "$(git -C "$repo" ls-files -u -- "$file" | awk -v s="$stage" '$3 == s')" ]]; then
+    git -C "$repo" rm -q -f -- "$file" || die "could not take the $side version of $file"
+    log "took the $side version of $file in '$id' (it is deleted on that side)"
+  else
+    git -C "$repo" checkout "$flag" -- "$file" || die "could not take the $side version of $file"
+    git -C "$repo" add -- "$file" || die "could not stage $file"
+    log "took the $side version of $file in '$id'"
+  fi
   conflict_progress "$id"
 }
 

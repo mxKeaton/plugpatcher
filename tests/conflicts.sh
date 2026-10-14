@@ -233,6 +233,32 @@ if grep -q "l02 (mine)" "$PCLONE/Panel.qml"; then fail "skip kept the commit it 
 [[ "$(conflict_field '.conflict // "none"')" == "none" ]] || fail "skip did not clear the conflict record"
 pass "skip dropped the stuck commit, kept the rest, and kept the dropped one as a ref"
 
+echo "== modify/delete: keep the file, then accept the deletion =="
+make_plugin test.delmod 'a\nb\nc\n'
+pw Panel.qml 'a\nb (mine)\nc\n'; pc "local: modify the file"
+git -C "$SEED" rm -q Panel.qml; up "upstream: delete the file"
+sync_conflict
+json="$(run conflicts "$ID" --json)"
+[[ "$(jq -r '.files | length' <<<"$json")" == "1" ]] || fail "the deleted file should be reported"
+[[ "$(jq -r '.files[0].hunks | length' <<<"$json")" == "0" ]] || fail "a delete conflict has no text regions"
+grep -q "no text conflict" <<<"$(run conflicts "$ID")" || fail "the report should point at the no-text case"
+run resolve-file "$ID" Panel.qml --mine >/dev/null 2>&1 || fail "resolve-file --mine should keep the file"
+[[ -f "$PREPO/Panel.qml" ]] || fail "the file should have been kept"
+grep -qx 'b (mine)' "$PREPO/Panel.qml" || fail "the kept file should hold the patch content"
+[[ -z "$(mctx)" ]] || fail "the file should be marked resolved"
+run abort "$ID" >/dev/null 2>&1 || fail "abort failed"
+pass "resolve-file --mine keeps a file that upstream deleted"
+
+# The upstream still deletes it, and the abort restored the patch commit, so the
+# same conflict comes straight back.
+sync_conflict
+run resolve-file "$ID" Panel.qml --upstream >/dev/null 2>&1 || fail "resolve-file --upstream should accept the deletion"
+[[ -e "$PREPO/Panel.qml" ]] && fail "accepting the deletion should remove the file"
+[[ -z "$(mctx)" ]] || fail "the deletion should be staged as resolved"
+run resolve "$ID" >/dev/null 2>&1 || fail "resolve after accepting the deletion failed"
+[[ -e "$PCLONE/Panel.qml" ]] && fail "the clone should not carry the deleted file"
+pass "resolve-file --upstream accepts a deletion"
+
 echo "== a plugin without a conflict =="
 [[ "$(run conflicts "$ID")" == "$ID: no conflict" ]] || fail "expected a clean report"
 [[ "$(run conflicts "$ID" --json | jq -r '.files | length')" == "0" ]] || fail "expected no files"
@@ -254,5 +280,26 @@ kept="$(git -C "$PREPO" for-each-ref --format='%(refname)' refs/plugpatcher/pre-
   || fail "the recorded snapshot is not the newest one"
 run undo "$ID" >/dev/null 2>&1 || fail "undo after pruning failed"
 pass "only the five newest snapshots are kept, and undo still works"
+
+echo "== several conflicted plugins at once =="
+make_plugin test.multi1 'a\nb\nc\n'
+pw Panel.qml 'a\nb (mine)\nc\n'; pc "local: m1"
+uw Panel.qml 'a\nb (upstream)\nc\n'; up "upstream: m1"
+sync_conflict
+make_plugin test.multi2 'a\nb\nc\n'
+pw Panel.qml 'a\nb (mine)\nc\n'; pc "local: m2"
+uw Panel.qml 'a\nb (upstream)\nc\n'; up "upstream: m2"
+sync_conflict
+
+human="$(run conflicts)"
+grep -q "test.multi1: 1 conflicted file(s)" <<<"$human" || fail "the first conflicted plugin is missing"
+grep -q "test.multi2: 1 conflicted file(s)" <<<"$human" || fail "the second conflicted plugin is missing"
+json="$(run conflicts --json)"
+[[ "$(jq -r '.plugins | length' <<<"$json")" == "2" ]] || fail "expected exactly two conflicted plugins"
+[[ "$(jq -r '[.plugins[].id] | sort | join(",")' <<<"$json")" == "test.multi1,test.multi2" ]] \
+  || fail "the json listed the wrong plugins"
+[[ "$(jq -r '.plugins[0].files[0].hunks[0].theirs | join(",")' <<<"$json")" == "b (mine)" ]] \
+  || fail "the multi-plugin json lost the patch side"
+pass "conflicts with no id reports every conflicted plugin"
 
 echo "ALL CONFLICT TESTS PASSED"

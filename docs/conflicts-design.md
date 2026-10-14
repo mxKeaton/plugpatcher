@@ -60,6 +60,29 @@ the remote (and say which was used) when the installed copy is not ahead.
   conflict (upstream above, yours below), and per-file `Mine / Upstream / Edit`.
 - `Skip` and `Undo` actions; conflict line in the catalog (`catalog.json`).
 
+## Testing it by hand
+
+A conflict only exists if the upstream really diverged, so it takes a push to
+reproduce. `tools/conflict-lab.sh` does that on the test plugin and leaves the
+rebase paused:
+
+```
+tools/conflict-lab.sh rich     # 4 files, 3 kinds: two regions in one file,
+                               # add/add, and modify/delete (no text markers)
+tools/conflict-lab.sh queue    # four patch commits; upstream clashes with the
+                               # 1st and the 3rd, so resolving reveals another
+tools/conflict-lab.sh empty    # both sides changed one line, so resolving to
+                               # upstream leaves the commit empty (it gets dropped)
+tools/conflict-lab.sh status   # what the lab recorded, and what conflicts now
+tools/conflict-lab.sh reset    # undo the whole lab
+```
+
+It records the pre-lab upstream commit and patch tip in
+`~/.local/state/plugpatcher/conflict-lab/state`, and never restarts the shell or
+sends a notification (stubbed `systemd-run` / `omarchy-shell` /
+`omarchy-notification-send` on PATH), so it only touches git repos and
+PlugPatcher's own files.
+
 ## Not doing
 
 - **Pre-flight prediction** (`merge-tree` / scratch worktree). The pause-and-record path is
